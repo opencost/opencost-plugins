@@ -1,0 +1,39 @@
+#!/bin/bash
+set -ex 
+
+gomod=$1
+
+if [ -z "$gomod" ] ; then 
+    echo "gomod is required as arg to this builder"
+    exit 1
+fi
+if [ -z "$VERSION" ] ; then 
+    echo "VERSION is a required env var"
+    exit 1
+fi
+
+if [ -z "$COMMIT" ] ; then
+    echo "COMMIT is a required env var"
+    exit 1
+fi
+
+echo "building plugin for gomod $gomod"
+if [[ $gomod == *"test"* ]]; then
+    echo "not building test module as plugin"
+    exit 0
+fi
+
+plugin_name=$(basename $(dirname $gomod))
+echo "plugin name: $plugin_name"
+
+GOOS=linux GOARCH=arm64 go build -x -o "./build/$plugin_name.ocplugin.arm64" \
+        -ldflags \
+          "-X github.com/opencost/opencost/pkg/version.Version=$VERSION \
+           -X github.com/opencost/opencost/pkg/version.GitCommit=$COMMIT" \
+        ./$plugin_name/cmd/main 
+
+GOOS=linux GOARCH=amd64 go build -x -o "./build/$plugin_name.ocplugin.amd64" \
+        -ldflags \
+          "-X github.com/opencost/opencost/pkg/version.Version=$VERSION \
+           -X github.com/opencost/opencost/pkg/version.GitCommit=$COMMIT" \
+        ./$plugin_name/cmd/main

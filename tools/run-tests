@@ -1,0 +1,13 @@
+#!/bin/bash
+set -ex 
+
+gomod=$1
+
+if [ -z "$gomod" ] ; then 
+    echo "gomod is required as arg to this builder"
+    exit 1
+fi
+cd $(dirname $gomod)
+
+go test ./... -coverprofile=coverage.out
+go vet ./...
