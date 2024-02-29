@@ -1,0 +1,63 @@
+name: Build and Publish Released Plugins
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Version. Please DO NOT include the 'v' prefix"
+        required: true
+
+jobs:
+  build-and-publish-opencost-plugins:
+      - uses: actions/checkout@v4
+        with:
+          path: ./
+
+      - name: Install just
+        uses: extractions/setup-just@v1
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      # Saves us from having to redownload all modules
+      - name: Go Mod cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+
+      - name: Build
+        run: |
+          just build-all-plugins
+      - name: Get Version From Tag
+        id: tag
+        if: ${{ github.event_name }} == 'push'
+        run: |
+          echo "TRIGGERED_TAG=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+      - name: Determine Version Number
+        id: version_number
+        run: |
+          if [ -z "${TRIGGERED_TAG}" ];
+          then
+            version=${{ inputs.release_version }}
+          else
+            version=$TRIGGERED_TAG
+          fi
+          if [[ ${version:0:1} == "v" ]];
+            echo "RELEASE_VERSION=${version:1}" >> $GITHUB_OUTPUT
+          then
+            echo "RELEASE_VERSION=$version" >> $GITHUB_OUTPUT
+          else
+          fi
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with: 
+          files: build/*
+          name: ${{steps.version_number.outputs.RELEASE_VERSION }}
