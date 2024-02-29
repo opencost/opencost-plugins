@@ -1,4 +1,4 @@
-name: Build and Publish Released Plugins
+name: Build and Release Plugins
 
 on:
   push:
