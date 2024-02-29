@@ -7,13 +7,12 @@ default:
     just --list
 
 # Run unit tests
-test:
-    {{commonenv}} go test ./... -coverprofile=coverage.out
-    {{commonenv}} go vet ./...
+test-all-plugins:
+    {{commonenv}} find . -type f -iname "go.mod" -print0 | xargs -0 -I{} ./tools/run-tests {}
 
-build-all-plugins:
+build-all-plugins: test-all-plugins
     mkdir -p ./build
-    {{commonenv}} VERSION={{version}} COMMIT={{commit}} find . -type f -iname "go.mod" -exec ./tools/build-plugins {} \;
+    find . -type f -iname "go.mod" -print0 | {{commonenv}} VERSION={{version}} COMMIT={{commit}} xargs -0 -I{} ./tools/build-plugins {}
 
 clean:
     rm -rf ./build
