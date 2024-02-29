@@ -32,13 +32,13 @@ func InvokePlugin(pathToConfig, pathToPluginSrc string, req model.CustomCostRequ
 	}
 	// pluginMap is the map of plugins we can dispense.
 	var pluginMap = map[string]plugin.Plugin{
-		pluginName: &ocplugin.CustomCostPlugin{},
+		"CustomCostSource": &ocplugin.CustomCostPlugin{},
 	}
 	// We're a host! Start by launching the plugin process.
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: handshakeConfig,
 		Plugins:         pluginMap,
-		Cmd:             exec.Command("go run " + pathToPluginSrc + " " + pathToConfig),
+		Cmd:             exec.Command("go", "run", pathToPluginSrc, pathToConfig),
 		Logger:          logger,
 	})
 
@@ -51,12 +51,13 @@ func InvokePlugin(pathToConfig, pathToPluginSrc string, req model.CustomCostRequ
 	}
 
 	// Request the plugin
-	raw, err := rpcClient.Dispense(pluginName)
+	raw, err := rpcClient.Dispense("CustomCostSource")
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	src := raw.(ocplugin.CustomCostSource)
-	resp := src.GetCustomCosts(req)
+	var iface model.CustomCostRequestInterface = &req
+	resp := src.GetCustomCosts(iface)
 	return resp
 }

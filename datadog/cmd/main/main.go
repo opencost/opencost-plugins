@@ -41,10 +41,10 @@ type DatadogCostSource struct {
 	usageApi *datadogV2.UsageMeteringApi
 }
 
-func (d *DatadogCostSource) GetCustomCosts(req model.CustomCostRequest) []model.CustomCostResponse {
+func (d *DatadogCostSource) GetCustomCosts(req model.CustomCostRequestInterface) []model.CustomCostResponse {
 	results := []model.CustomCostResponse{}
 
-	targets, err := opencost.GetWindows(*req.TargetWindow.Start(), *req.TargetWindow.End(), req.Resolution)
+	targets, err := opencost.GetWindows(*req.GetTargetWindow().Start(), *req.GetTargetWindow().End(), req.GetTargetResolution())
 	if err != nil {
 		log.Errorf("error getting windows: %v", err)
 		errResp := model.CustomCostResponse{
@@ -63,6 +63,8 @@ func (d *DatadogCostSource) GetCustomCosts(req model.CustomCostRequest) []model.
 		}
 		results = append(results, errResp)
 		return results
+	} else {
+		log.Debugf("got list pricing: %v", listPricing.Details)
 	}
 
 	for _, target := range targets {
@@ -91,7 +93,7 @@ func main() {
 
 	// pluginMap is the map of plugins we can dispense.
 	var pluginMap = map[string]plugin.Plugin{
-		"GetCustomCosts": &ocplugin.CustomCostPlugin{Impl: &ddCostSrc},
+		"CustomCostSource": &ocplugin.CustomCostPlugin{Impl: &ddCostSrc},
 	}
 
 	plugin.Serve(&plugin.ServeConfig{
@@ -112,7 +114,7 @@ func boilerplateDDCustomCost(win opencost.Window) model.CustomCostResponse {
 		Costs:      []*model.CustomCost{},
 	}
 }
-func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPricing *datadogplugin.ProductData) model.CustomCostResponse {
+func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPricing *datadogplugin.PricingInformation) model.CustomCostResponse {
 	ccResp := boilerplateDDCustomCost(window)
 	params := datadogV2.NewGetHourlyUsageOptionalParameters()
 	params.FilterTimestampEnd = window.End()
@@ -165,7 +167,7 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 				ccResp.Costs = append(ccResp.Costs, &cost)
 			}
 		}
-		if resp.Meta.Pagination.NextRecordId.IsSet() {
+		if resp.Meta != nil && resp.Meta.Pagination != nil && resp.Meta.Pagination.NextRecordId.IsSet() {
 			nextPageId = *resp.Meta.Pagination.NextRecordId.Get()
 		} else {
 			nextPageId = ""
@@ -203,7 +205,7 @@ var usageToPricingMap = map[string]string{
 	"invocations_sum":                "serverless_inv",
 }
 
-func getListingInfo(productfamily string, usageType string, listPricing *datadogplugin.ProductData) (description string, usageUnit string, pricing float32, currency string) {
+func getListingInfo(productfamily string, usageType string, listPricing *datadogplugin.PricingInformation) (description string, usageUnit string, pricing float32, currency string) {
 	pricingKey := ""
 	var found bool
 	// first, check if the usage type is mapped to a pricing key
@@ -219,7 +221,7 @@ func getListingInfo(productfamily string, usageType string, listPricing *datadog
 
 	matchedPrice := false
 	// search through the pricing for the right key
-	for _, detail := range listPricing.OfferData.PricingInformation.Details {
+	for _, detail := range listPricing.Details {
 		if pricingKey == detail.Name {
 			matchedPrice = true
 			description = detail.DetailDescription
@@ -234,7 +236,7 @@ func getListingInfo(productfamily string, usageType string, listPricing *datadog
 	}
 
 	if !matchedPrice {
-		log.Warnf("unable to find pricing for product %s/%s. going to set to 0 price")
+		log.Warnf("unable to find pricing for product %s/%s. going to set to 0 price", productfamily, usageType)
 		usageType = "PRICING UNAVAILABLE"
 		description = productfamily + " " + usageType
 		pricing = 0.0
@@ -299,7 +301,7 @@ func getConfigFilePath() (string, error) {
 	return os.Args[1], nil
 }
 
-func scrapeDatadogPrices(url string) (*datadogplugin.ProductData, error) {
+func scrapeDatadogPrices(url string) (*datadogplugin.PricingInformation, error) {
 	// Send a GET request to the URL
 	response, err := http.Get(url)
 	if err != nil {
@@ -317,15 +319,17 @@ func scrapeDatadogPrices(url string) (*datadogplugin.ProductData, error) {
 	}
 	res := datadogplugin.DatadogProJSON{}
 	r := regexp.MustCompile(`var productDetailData = \s*(.*?)\s*;`)
+	log.Debugf("got response: %s", string(b))
 	matches := r.FindAllStringSubmatch(string(b), -1)
 	if len(matches) != 1 {
 		return nil, fmt.Errorf("requires exactly 1 product detail data, got %d", len(matches))
 	}
 
+	log.Debugf("matches[0][1]:" + matches[0][1])
 	err = json.Unmarshal([]byte(matches[0][1]), &res)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to read pricing page body: %v", err)
 	}
 
-	return &res.ProductData, nil
+	return &res.OfferData.PricingInformation, nil
 }
