@@ -23,17 +23,18 @@ if [[ $gomod == *"test"* ]]; then
     exit 0
 fi
 
+echo $(pwd)
 plugin_name=$(basename $(dirname $gomod))
 echo "plugin name: $plugin_name"
-
-GOOS=linux GOARCH=arm64 go build -x -o "./build/$plugin_name.ocplugin.arm64" \
+cd $plugin_name
+GOOS=linux GOARCH=arm64 go build -x -o "../build/$plugin_name.ocplugin.arm64" \
         -ldflags \
           "-X github.com/opencost/opencost/pkg/version.Version=$VERSION \
            -X github.com/opencost/opencost/pkg/version.GitCommit=$COMMIT" \
-        ./$plugin_name/cmd/main 
+        ./cmd/main 
 
-GOOS=linux GOARCH=amd64 go build -x -o "./build/$plugin_name.ocplugin.amd64" \
+GOOS=linux GOARCH=amd64 go build -x -o "../build/$plugin_name.ocplugin.amd64" \
         -ldflags \
           "-X github.com/opencost/opencost/pkg/version.Version=$VERSION \
            -X github.com/opencost/opencost/pkg/version.GitCommit=$COMMIT" \
-        ./$plugin_name/cmd/main
+        ./cmd/main
