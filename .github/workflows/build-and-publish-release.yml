@@ -12,7 +12,8 @@ on:
 
 jobs:
   build-and-publish-opencost-plugins:
-
+    runs-on: ubuntu-latest
+    steps: 
      -  name: checkout
         uses: actions/checkout@v4
         with:
