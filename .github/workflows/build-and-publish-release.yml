@@ -13,7 +13,8 @@ on:
 jobs:
   build-and-publish-opencost-plugins:
 
-      - uses: actions/checkout@v4
+     -  name: checkout
+        uses: actions/checkout@v4
         with:
           path: ./
 
