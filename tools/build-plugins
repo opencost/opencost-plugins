@@ -23,6 +23,7 @@ if [[ $gomod == *"test"* ]]; then
     exit 0
 fi
 
+echo $(pwd)
 plugin_name=$(basename $(dirname $gomod))
 echo "plugin name: $plugin_name"
 GOOS=linux GOARCH=arm64 go build -x -o "./build/$plugin_name.ocplugin.arm64" \
