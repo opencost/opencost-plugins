@@ -11,13 +11,13 @@ on:
         required: true
 
 jobs:
-  build-and-publish-opencost-plugins:
+  build-and-publish-plugins:
     runs-on: ubuntu-latest
     steps: 
-     -  name: checkout
-        uses: actions/checkout@v4
-        with:
-          path: ./
+      -  name: checkout
+         uses: actions/checkout@v4
+         with:
+           path: ./
 
       - name: Install just
         uses: extractions/setup-just@v1
