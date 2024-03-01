@@ -25,15 +25,14 @@ fi
 
 plugin_name=$(basename $(dirname $gomod))
 echo "plugin name: $plugin_name"
-
 GOOS=linux GOARCH=arm64 go build -x -o "./build/$plugin_name.ocplugin.arm64" \
         -ldflags \
           "-X github.com/opencost/opencost/pkg/version.Version=$VERSION \
            -X github.com/opencost/opencost/pkg/version.GitCommit=$COMMIT" \
-        ./$plugin_name/cmd/main 
+        $(dirname $gomod)/cmd/main 
 
 GOOS=linux GOARCH=amd64 go build -x -o "./build/$plugin_name.ocplugin.amd64" \
         -ldflags \
           "-X github.com/opencost/opencost/pkg/version.Version=$VERSION \
            -X github.com/opencost/opencost/pkg/version.GitCommit=$COMMIT" \
-        ./$plugin_name/cmd/main
+        $(dirname $gomod)/cmd/main
