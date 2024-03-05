@@ -13,6 +13,7 @@ import (
 
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadogV2"
+	"golang.org/x/time/rate"
 
 	"github.com/hashicorp/go-plugin"
 	datadogplugin "github.com/opencost/opencost-plugins/datadog/datadogplugin"
@@ -37,8 +38,9 @@ var handshakeConfig = plugin.HandshakeConfig{
 
 // Implementation of CustomCostSource
 type DatadogCostSource struct {
-	ddCtx    context.Context
-	usageApi *datadogV2.UsageMeteringApi
+	ddCtx       context.Context
+	usageApi    *datadogV2.UsageMeteringApi
+	rateLimiter *rate.Limiter
 }
 
 func (d *DatadogCostSource) GetCustomCosts(req model.CustomCostRequestInterface) []model.CustomCostResponse {
@@ -88,7 +90,11 @@ func main() {
 		log.Fatalf("error building DD config: %v", err)
 	}
 
-	ddCostSrc := DatadogCostSource{}
+	// datadog usage APIs allow 10 requests every 30 seconds
+	rateLimiter := rate.NewLimiter(0.25, 5)
+	ddCostSrc := DatadogCostSource{
+		rateLimiter: rateLimiter,
+	}
 	ddCostSrc.ddCtx, ddCostSrc.usageApi = getDatadogClients(*ddConfig)
 
 	// pluginMap is the map of plugins we can dispense.
@@ -124,6 +130,18 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 		if nextPageId != "init" {
 			params.PageNextRecordId = &nextPageId
 		}
+		if d.rateLimiter.Tokens() < 1.0 {
+			log.Infof("datadog rate limit reached. holding request until rate capacity is back")
+		}
+
+		err := d.rateLimiter.Wait(context.TODO())
+		if err != nil {
+			log.Errorf("error waiting on rate limiter`: %v\n", err)
+			ccResp.Errors = append(ccResp.Errors, err)
+			return ccResp
+		}
+
+		
 		resp, r, err := d.usageApi.GetHourlyUsage(d.ddCtx, *window.Start(), "all", *params)
 		if err != nil {
 			log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)

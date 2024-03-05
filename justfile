@@ -10,7 +10,7 @@ default:
 test-all-plugins:
     {{commonenv}} find . -type f -iname "go.mod" -print0 | xargs -0 -I{} ./tools/run-tests {}
 
-build-all-plugins: test-all-plugins
+build-all-plugins: clean test-all-plugins
     mkdir -p ./build
     find . -type f -iname "go.mod" -print0 | {{commonenv}} VERSION={{version}} COMMIT={{commit}} xargs -0 -I{} ./tools/build-plugins {}
 
