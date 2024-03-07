@@ -13,8 +13,9 @@ import (
 	datadogplugin "github.com/opencost/opencost-plugins/datadog/datadogplugin"
 	harness "github.com/opencost/opencost-plugins/test/pkg/harness"
 	"github.com/opencost/opencost/core/pkg/log"
-	"github.com/opencost/opencost/core/pkg/model"
-	"github.com/opencost/opencost/core/pkg/opencost"
+	"github.com/opencost/opencost/core/pkg/model/pb"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // this test gets DD keys from env vars, writes a config file
@@ -75,10 +76,11 @@ func TestDDCostRetrieval(t *testing.T) {
 	windowStart := time.Date(2024, 2, 27, 0, 0, 0, 0, time.UTC)
 	// query for qty 2 of 1 hour windows
 	windowEnd := time.Date(2024, 2, 27, 2, 0, 0, 0, time.UTC)
-	win := opencost.NewClosedWindow(windowStart, windowEnd)
-	req := model.CustomCostRequest{
-		TargetWindow: &win,
-		Resolution:   time.Hour,
+
+	req := pb.CustomCostRequest{
+		Start:      timestamppb.New(windowStart),
+		End:        timestamppb.New(windowEnd),
+		Resolution: durationpb.New(time.Hour),
 	}
 	response := harness.InvokePlugin(file.Name(), pluginFile, req)
 
