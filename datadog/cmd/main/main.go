@@ -14,11 +14,12 @@ import (
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadogV2"
 	"golang.org/x/time/rate"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/hashicorp/go-plugin"
 	datadogplugin "github.com/opencost/opencost-plugins/datadog/datadogplugin"
 	"github.com/opencost/opencost/core/pkg/log"
-	"github.com/opencost/opencost/core/pkg/model"
+	"github.com/opencost/opencost/core/pkg/model/pb"
 	"github.com/opencost/opencost/core/pkg/opencost"
 	ocplugin "github.com/opencost/opencost/core/pkg/plugin"
 )
@@ -43,14 +44,14 @@ type DatadogCostSource struct {
 	rateLimiter *rate.Limiter
 }
 
-func (d *DatadogCostSource) GetCustomCosts(req model.CustomCostRequestInterface) []model.CustomCostResponse {
-	results := []model.CustomCostResponse{}
+func (d *DatadogCostSource) GetCustomCosts(req pb.CustomCostRequest) []pb.CustomCostResponse {
+	results := []pb.CustomCostResponse{}
 
-	targets, err := opencost.GetWindows(*req.GetTargetWindow().Start(), *req.GetTargetWindow().End(), req.GetTargetResolution())
+	targets, err := opencost.GetWindows(req.Start.AsTime(), req.End.AsTime(), req.Resolution.AsDuration())
 	if err != nil {
 		log.Errorf("error getting windows: %v", err)
-		errResp := model.CustomCostResponse{
-			Errors: []error{err},
+		errResp := pb.CustomCostResponse{
+			Errors: []string{fmt.Sprintf("error getting windows: %v", err)},
 		}
 		results = append(results, errResp)
 		return results
@@ -60,8 +61,8 @@ func (d *DatadogCostSource) GetCustomCosts(req model.CustomCostRequestInterface)
 	listPricing, err := scrapeDatadogPrices(url)
 	if err != nil {
 		log.Errorf("error getting dd pricing: %v", err)
-		errResp := model.CustomCostResponse{
-			Errors: []error{err},
+		errResp := pb.CustomCostResponse{
+			Errors: []string{fmt.Sprintf("error getting dd pricing: %v", err)},
 		}
 		results = append(results, errResp)
 		return results
@@ -105,22 +106,24 @@ func main() {
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: handshakeConfig,
 		Plugins:         pluginMap,
+		GRPCServer:      plugin.DefaultGRPCServer,
 	})
 }
 
-func boilerplateDDCustomCost(win opencost.Window) model.CustomCostResponse {
-	return model.CustomCostResponse{
+func boilerplateDDCustomCost(win opencost.Window) pb.CustomCostResponse {
+	return pb.CustomCostResponse{
 		Metadata:   map[string]string{"api_client_version": "v2"},
-		Costsource: "observability",
+		CostSource: "observability",
 		Domain:     "datadog",
 		Version:    "v1",
 		Currency:   "USD",
-		Window:     win,
-		Errors:     []error{},
-		Costs:      []*model.CustomCost{},
+		Start:      timestamppb.New(*win.Start()),
+		End:        timestamppb.New(*win.End()),
+		Errors:     []string{},
+		Costs:      []*pb.CustomCost{},
 	}
 }
-func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPricing *datadogplugin.PricingInformation) model.CustomCostResponse {
+func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPricing *datadogplugin.PricingInformation) pb.CustomCostResponse {
 	ccResp := boilerplateDDCustomCost(window)
 	params := datadogV2.NewGetHourlyUsageOptionalParameters()
 	params.FilterTimestampEnd = window.End()
@@ -137,21 +140,19 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 		err := d.rateLimiter.Wait(context.TODO())
 		if err != nil {
 			log.Errorf("error waiting on rate limiter`: %v\n", err)
-			ccResp.Errors = append(ccResp.Errors, err)
+			ccResp.Errors = append(ccResp.Errors, err.Error())
 			return ccResp
 		}
 
-		
 		resp, r, err := d.usageApi.GetHourlyUsage(d.ddCtx, *window.Start(), "all", *params)
 		if err != nil {
 			log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
 			log.Errorf("Full HTTP response: %v\n", r)
-			ccResp.Errors = append(ccResp.Errors, err)
+			ccResp.Errors = append(ccResp.Errors, err.Error())
 		}
 
 		for _, hourlyUsageData := range resp.Data {
 			for _, meas := range hourlyUsageData.Attributes.Measurements {
-				clonedPtr := window.Clone()
 				usageQty := float32(0.0)
 
 				if meas.Value.IsSet() {
@@ -165,7 +166,7 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 
 				desc, usageUnit, pricing, currency := getListingInfo(*hourlyUsageData.Attributes.ProductFamily, *meas.UsageType, listPricing)
 				ccResp.Currency = currency
-				cost := model.CustomCost{
+				cost := pb.CustomCost{
 					Zone:               *hourlyUsageData.Attributes.Region,
 					AccountName:        *hourlyUsageData.Attributes.OrgName,
 					ChargeCategory:     "usage",
@@ -174,11 +175,10 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 					ResourceType:       *hourlyUsageData.Attributes.ProductFamily,
 					Id:                 *hourlyUsageData.Id,
 					ProviderId:         *hourlyUsageData.Attributes.PublicId + "/" + *meas.UsageType,
-					Window:             &clonedPtr,
 					Labels:             map[string]string{},
 					ListCost:           usageQty * pricing,
 					ListUnitPrice:      pricing,
-					UsageQty:           usageQty,
+					UsageQuantity:      usageQty,
 					UsageUnit:          usageUnit,
 					ExtendedAttributes: nil,
 				}
