@@ -82,7 +82,7 @@ func TestDDCostRetrieval(t *testing.T) {
 		End:        timestamppb.New(windowEnd),
 		Resolution: durationpb.New(time.Hour),
 	}
-	response := harness.InvokePlugin(file.Name(), pluginFile, req)
+	response := harness.InvokePlugin(file.Name(), pluginFile, &req)
 
 	// confirm no errors in result
 	if len(response) == 0 {

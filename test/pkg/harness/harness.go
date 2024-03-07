@@ -17,7 +17,7 @@ import (
 // the test harness is designed to run plugins locally, and return the results
 // the harness expects to be given a path to a valid config, and a path to a plugin implementation
 // it does not run binaries, and instead uses go run
-func InvokePlugin(pathToConfig, pathToPluginSrc string, req pb.CustomCostRequest) []pb.CustomCostResponse {
+func InvokePlugin(pathToConfig, pathToPluginSrc string, req *pb.CustomCostRequest) []*pb.CustomCostResponse {
 	filename := path.Base(pathToConfig)
 	pluginName := strings.Split(filename, "_")[0]
 	// Create an hclog.Logger
