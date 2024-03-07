@@ -5,7 +5,7 @@ go 1.21.6
 require (
 	github.com/hashicorp/go-hclog v1.6.2
 	github.com/hashicorp/go-plugin v1.6.0
-	github.com/opencost/opencost/core v0.0.0-20240307133348-88e4488af689
+	github.com/opencost/opencost/core v0.0.0-20240307141548-816f98c9051a
 )
 
 require (

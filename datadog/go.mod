@@ -31,7 +31,7 @@ require (
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/opencost/opencost-plugins v0.0.0-20240301164750-359b361ecae1 // indirect
 	github.com/opencost/opencost-plugins/test v0.0.0-20240301164750-359b361ecae1 // indirect
-	github.com/opencost/opencost/core v0.0.0-20240307133348-88e4488af689 // indirect
+	github.com/opencost/opencost/core v0.0.0-20240307141548-816f98c9051a // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.1.1 // indirect

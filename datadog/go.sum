@@ -271,6 +271,8 @@ github.com/opencost/opencost/core v0.0.0-20240301064956-9c1f94b12d5e h1:B2iV5L9c
 github.com/opencost/opencost/core v0.0.0-20240301064956-9c1f94b12d5e/go.mod h1:9o1Jfz3nuxVYRmlGk4xo84XZxoQk/LHqPd+Kvo1YIZ4=
 github.com/opencost/opencost/core v0.0.0-20240307133348-88e4488af689 h1:yhViVMLZVoNsjLDrS9KM5uaXVuKcO69m+ga77fgMx+s=
 github.com/opencost/opencost/core v0.0.0-20240307133348-88e4488af689/go.mod h1:9o1Jfz3nuxVYRmlGk4xo84XZxoQk/LHqPd+Kvo1YIZ4=
+github.com/opencost/opencost/core v0.0.0-20240307141548-816f98c9051a h1:m6sesjHd7phuhoWhrCXrzLKHJbAdlH0Q07Uvpbgl4G0=
+github.com/opencost/opencost/core v0.0.0-20240307141548-816f98c9051a/go.mod h1:9o1Jfz3nuxVYRmlGk4xo84XZxoQk/LHqPd+Kvo1YIZ4=
 github.com/pascaldekloe/goe v0.0.0-20180627143212-57f6aae5913c/go.mod h1:lzWF7FIEvWOWxwDKqyGYQf6ZUaNfKdP144TG7ZOy1lc=
 github.com/patrickmn/go-cache v2.1.0+incompatible h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=
 github.com/patrickmn/go-cache v2.1.0+incompatible/go.mod h1:3Qf8kWWT7OJRJbdiICTKqZju1ZixQ/KpMGzzAfe6+WQ=
