@@ -44,8 +44,8 @@ type DatadogCostSource struct {
 	rateLimiter *rate.Limiter
 }
 
-func (d *DatadogCostSource) GetCustomCosts(req pb.CustomCostRequest) []pb.CustomCostResponse {
-	results := []pb.CustomCostResponse{}
+func (d *DatadogCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.CustomCostResponse {
+	results := []*pb.CustomCostResponse{}
 
 	targets, err := opencost.GetWindows(req.Start.AsTime(), req.End.AsTime(), req.Resolution.AsDuration())
 	if err != nil {
@@ -53,7 +53,7 @@ func (d *DatadogCostSource) GetCustomCosts(req pb.CustomCostRequest) []pb.Custom
 		errResp := pb.CustomCostResponse{
 			Errors: []string{fmt.Sprintf("error getting windows: %v", err)},
 		}
-		results = append(results, errResp)
+		results = append(results, &errResp)
 		return results
 	}
 
@@ -64,7 +64,7 @@ func (d *DatadogCostSource) GetCustomCosts(req pb.CustomCostRequest) []pb.Custom
 		errResp := pb.CustomCostResponse{
 			Errors: []string{fmt.Sprintf("error getting dd pricing: %v", err)},
 		}
-		results = append(results, errResp)
+		results = append(results, &errResp)
 		return results
 	} else {
 		log.Debugf("got list pricing: %v", listPricing.Details)
@@ -123,7 +123,7 @@ func boilerplateDDCustomCost(win opencost.Window) pb.CustomCostResponse {
 		Costs:      []*pb.CustomCost{},
 	}
 }
-func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPricing *datadogplugin.PricingInformation) pb.CustomCostResponse {
+func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPricing *datadogplugin.PricingInformation) *pb.CustomCostResponse {
 	ccResp := boilerplateDDCustomCost(window)
 	params := datadogV2.NewGetHourlyUsageOptionalParameters()
 	params.FilterTimestampEnd = window.End()
@@ -141,7 +141,7 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 		if err != nil {
 			log.Errorf("error waiting on rate limiter`: %v\n", err)
 			ccResp.Errors = append(ccResp.Errors, err.Error())
-			return ccResp
+			return &ccResp
 		}
 
 		resp, r, err := d.usageApi.GetHourlyUsage(d.ddCtx, *window.Start(), "all", *params)
@@ -192,7 +192,7 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 		}
 	}
 
-	return ccResp
+	return &ccResp
 }
 
 // the public pricing used in the pricing list doesn't always match the usage reports
@@ -323,17 +323,17 @@ func scrapeDatadogPrices(url string) (*datadogplugin.PricingInformation, error) 
 	// Send a GET request to the URL
 	response, err := http.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch the page: %v", err)
+		return nil, fmt.Errorf("failed to fetch the page: %v", err)
 	}
 	defer response.Body.Close()
 
 	// Check if the request was successful
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Failed to retrieve pricing page. Status code: %d", response.StatusCode)
+		return nil, fmt.Errorf("failed to retrieve pricing page. Status code: %d", response.StatusCode)
 	}
 	b, err := io.ReadAll(response.Body)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to read pricing page body: %v", err)
+		return nil, fmt.Errorf("failed to read pricing page body: %v", err)
 	}
 	res := datadogplugin.DatadogProJSON{}
 	r := regexp.MustCompile(`var productDetailData = \s*(.*?)\s*;`)
@@ -346,7 +346,7 @@ func scrapeDatadogPrices(url string) (*datadogplugin.PricingInformation, error) 
 	log.Debugf("matches[0][1]:" + matches[0][1])
 	err = json.Unmarshal([]byte(matches[0][1]), &res)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to read pricing page body: %v", err)
+		return nil, fmt.Errorf("failed to read pricing page body: %v", err)
 	}
 
 	return &res.OfferData.PricingInformation, nil
