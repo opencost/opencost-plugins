@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	datadogplugin "github.com/opencost/opencost-plugins/datadog/datadogplugin"
 	harness "github.com/opencost/opencost-plugins/test/pkg/harness"
 	"github.com/opencost/opencost/core/pkg/log"
@@ -73,9 +74,9 @@ func TestDDCostRetrieval(t *testing.T) {
 	parent := filepath.Dir(filename)
 	pluginRoot := filepath.Dir(parent)
 	pluginFile := pluginRoot + "/cmd/main/main.go"
-	windowStart := time.Date(2024, 2, 27, 0, 0, 0, 0, time.UTC)
+	windowStart := time.Date(2024, 3, 8, 0, 0, 0, 0, time.UTC)
 	// query for qty 2 of 1 hour windows
-	windowEnd := time.Date(2024, 2, 27, 2, 0, 0, 0, time.UTC)
+	windowEnd := time.Date(2024, 3, 8, 2, 0, 0, 0, time.UTC)
 
 	req := pb.CustomCostRequest{
 		Start:      timestamppb.New(windowStart),
@@ -106,10 +107,25 @@ func TestDDCostRetrieval(t *testing.T) {
 			t.Fatalf("unexpected domain. expected datadog, got %s", resp.Domain)
 		}
 	}
-	// confirm there are > 0 custom costs
+
+	// check some attributes of the cost response
 	for _, resp := range response {
+		// confirm there are > 0 custom costs
 		if len(resp.Costs) < 1 {
 			t.Fatalf("expect non-zero costs in response.")
+		}
+
+		for _, cost := range resp.Costs {
+			if cost.ResourceType == "indexed_logs" {
+				// check for sane values fo a rate-priced resource
+				if cost.ListCost > 1000 {
+					spew.Dump(
+						cost,
+					)
+					t.Fatalf("unexpectedly high cost for indexed logs: %f", cost.ListCost)
+
+				}
+			}
 		}
 	}
 
