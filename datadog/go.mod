@@ -4,6 +4,7 @@ go 1.21.6
 
 require (
 	github.com/DataDog/datadog-api-client-go/v2 v2.23.0
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/hashicorp/go-plugin v1.6.0
 	github.com/opencost/opencost-plugins/test v0.0.0-20240307142929-df4df8ee69fa
 	github.com/opencost/opencost/core v0.0.0-20240307141548-816f98c9051a
