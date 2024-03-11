@@ -125,11 +125,10 @@ func boilerplateDDCustomCost(win opencost.Window) pb.CustomCostResponse {
 }
 func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPricing *datadogplugin.PricingInformation) *pb.CustomCostResponse {
 	ccResp := boilerplateDDCustomCost(window)
-	params := datadogV2.NewGetHourlyUsageOptionalParameters()
-	params.FilterTimestampEnd = window.End()
 
 	nextPageId := "init"
 	for morepages := true; morepages; morepages = (nextPageId != "") {
+		params := datadogV2.NewGetHourlyUsageOptionalParameters()
 		if nextPageId != "init" {
 			params.PageNextRecordId = &nextPageId
 		}
@@ -137,13 +136,14 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 			log.Infof("datadog rate limit reached. holding request until rate capacity is back")
 		}
 
-		err := d.rateLimiter.Wait(context.TODO())
+		err := d.rateLimiter.WaitN(context.TODO(), 2)
 		if err != nil {
 			log.Errorf("error waiting on rate limiter`: %v\n", err)
 			ccResp.Errors = append(ccResp.Errors, err.Error())
 			return &ccResp
 		}
 
+		params.FilterTimestampEnd = window.End()
 		resp, r, err := d.usageApi.GetHourlyUsage(d.ddCtx, *window.Start(), "all", *params)
 		if err != nil {
 			log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
@@ -151,30 +151,42 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 			ccResp.Errors = append(ccResp.Errors, err.Error())
 		}
 
-		for _, hourlyUsageData := range resp.Data {
-			for _, meas := range hourlyUsageData.Attributes.Measurements {
+		// many datadog usages are given in terms of a cumulative month to date usage
+		// therefore, make a call for the hour before this hour to get a comparison
+		// where needed
+		params.FilterTimestampEnd = window.Start()
+		toSub := window.End().Sub(*window.Start())
+		respPriorWindow, r, err := d.usageApi.GetHourlyUsage(d.ddCtx, (*window.Start()).Add(-toSub), "all", *params)
+		if err != nil {
+			log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
+			log.Errorf("Full HTTP response: %v\n", r)
+			ccResp.Errors = append(ccResp.Errors, err.Error())
+		}
+
+		for index := range resp.Data {
+			for indexMeas := range resp.Data[index].Attributes.Measurements {
 				usageQty := float32(0.0)
 
-				if meas.Value.IsSet() {
-					usageQty = float32(meas.GetValue())
+				if resp.Data[index].Attributes.Measurements[indexMeas].Value.IsSet() {
+					usageQty = GetUsageQuantity(*resp.Data[index].Attributes.ProductFamily, resp.Data[index].Attributes.Measurements[indexMeas], respPriorWindow.Data[index].Attributes.Measurements[indexMeas])
 				}
 
 				if usageQty == 0.0 {
-					log.Tracef("product %s/%s had 0 usage, not recording that cost", *hourlyUsageData.Attributes.ProductFamily, *meas.UsageType)
+					log.Tracef("product %s/%s had 0 usage, not recording that cost", *resp.Data[index].Attributes.ProductFamily, *resp.Data[index].Attributes.Measurements[indexMeas].UsageType)
 					continue
 				}
 
-				desc, usageUnit, pricing, currency := getListingInfo(*hourlyUsageData.Attributes.ProductFamily, *meas.UsageType, listPricing)
+				desc, usageUnit, pricing, currency := getListingInfo(window, *resp.Data[index].Attributes.ProductFamily, *resp.Data[index].Attributes.Measurements[indexMeas].UsageType, listPricing)
 				ccResp.Currency = currency
 				cost := pb.CustomCost{
-					Zone:               *hourlyUsageData.Attributes.Region,
-					AccountName:        *hourlyUsageData.Attributes.OrgName,
+					Zone:               *resp.Data[index].Attributes.Region,
+					AccountName:        *resp.Data[index].Attributes.OrgName,
 					ChargeCategory:     "usage",
 					Description:        desc,
-					ResourceName:       *meas.UsageType,
-					ResourceType:       *hourlyUsageData.Attributes.ProductFamily,
-					Id:                 *hourlyUsageData.Id,
-					ProviderId:         *hourlyUsageData.Attributes.PublicId + "/" + *meas.UsageType,
+					ResourceName:       *resp.Data[index].Attributes.Measurements[indexMeas].UsageType,
+					ResourceType:       *resp.Data[index].Attributes.ProductFamily,
+					Id:                 *resp.Data[index].Id,
+					ProviderId:         *resp.Data[index].Attributes.PublicId + "/" + *resp.Data[index].Attributes.Measurements[indexMeas].UsageType,
 					Labels:             map[string]string{},
 					ListCost:           usageQty * pricing,
 					ListUnitPrice:      pricing,
@@ -193,6 +205,23 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 	}
 
 	return &ccResp
+}
+
+// we have two basic types usages: cumulative and rate
+// rate usages are e.g., number of infra hosts, that have fixed costs per hour
+// cumulative usages are e.g., number of logs ingested, that have a fixed cost per unit
+// if a usage is cumulative, then suptract the usage in the hour prior to get the incremental usage
+// if a usage is a rate, then just return the usage
+func GetUsageQuantity(productFamily string, currentPeriodUsage, previousPeriodUsage datadogV2.HourlyUsageMeasurement) float32 {
+	curUsage := currentPeriodUsage.GetValue()
+	if _, found := rateFamilies[productFamily]; found {
+		// this family is a rate family, so just return the usage
+		return float32(curUsage)
+	}
+
+	prevUsage := previousPeriodUsage.GetValue()
+
+	return float32(curUsage - prevUsage)
 }
 
 // the public pricing used in the pricing list doesn't always match the usage reports
@@ -214,6 +243,8 @@ var usageToPricingMap = map[string]string{
 	"ingested_events_bytes":          "ingested_logs",
 	"logs_live_ingested_bytes":       "ingested_logs",
 	"logs_rehydrated_ingested_bytes": "ingested_logs",
+	"indexed_events_count":           "indexed_logs",
+	"logs_live_indexed_count":        "indexed_logs",
 	"synthetics_api":                 "api_tests",
 	"synthetics_browser":             "browser_checks",
 	"tasks_count":                    "fargate_tasks",
@@ -223,7 +254,23 @@ var usageToPricingMap = map[string]string{
 	"invocations_sum":                "serverless_inv",
 }
 
-func getListingInfo(productfamily string, usageType string, listPricing *datadogplugin.PricingInformation) (description string, usageUnit string, pricing float32, currency string) {
+var pricingMap = map[string]float64{
+	"custom_metrics": 100.0,
+	"indexed_logs":   1000000.0,
+	"ingested_logs":  1024.0 * 1024.0 * 1024.0 * 1024.0,
+	"api_tests":      10000.0,
+	"browser_checks": 1000.0,
+	"rum_events":     10000.0,
+	"security_logs":  1024.0 * 1024.0 * 1024.0 * 1024.0,
+	"serverless_inv": 1000000.0,
+}
+
+var rateFamilies = map[string]int{
+	"infra_hosts": 730.0,
+	"apm_hosts":   730.0,
+}
+
+func getListingInfo(window opencost.Window, productfamily string, usageType string, listPricing *datadogplugin.PricingInformation) (description string, usageUnit string, pricing float32, currency string) {
 	pricingKey := ""
 	var found bool
 	// first, check if the usage type is mapped to a pricing key
@@ -249,7 +296,22 @@ func getListingInfo(productfamily string, usageType string, listPricing *datadog
 			if err != nil {
 				log.Errorf("error converting string to float for rate: %s", detail.OneMonths.Rate)
 			}
-			pricing = float32(pricingFloat)
+
+			// if the family is a rate family, then the pricing is per hour
+			if hourlyPriceDenominator, found := rateFamilies[pricingKey]; found {
+				// adjust the pricing to fit the window duration
+				pricingPerHour := float32(pricingFloat) / float32(hourlyPriceDenominator)
+				pricing = pricingPerHour * float32(window.Duration().Hours())
+			} else {
+				// if the family is a cumulative family, then the pricing is per unit
+				// check for a scale factor on the pricing
+				if scalefactor, found := pricingMap[pricingKey]; found {
+					pricing = float32(pricingFloat) / float32(scalefactor)
+				} else {
+					pricing = float32(pricingFloat)
+				}
+			}
+
 		}
 	}
 
