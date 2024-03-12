@@ -168,7 +168,15 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 				usageQty := float32(0.0)
 
 				if resp.Data[index].Attributes.Measurements[indexMeas].Value.IsSet() {
-					usageQty = GetUsageQuantity(*resp.Data[index].Attributes.ProductFamily, resp.Data[index].Attributes.Measurements[indexMeas], respPriorWindow.Data[index].Attributes.Measurements[indexMeas])
+					var prior *datadogV2.HourlyUsageMeasurement
+					if len(respPriorWindow.Data) > index {
+						prior = &respPriorWindow.Data[index].Attributes.Measurements[indexMeas]
+					} else {
+						// then this is an out of bound access
+						log.Warnf("could not get prior window data from timeframe %v, and measurement %v", window, resp.Data[index].Attributes.Measurements[indexMeas])
+						log.Warnf("passing in nil prior window data")
+					}
+					usageQty = GetUsageQuantity(*resp.Data[index].Attributes.ProductFamily, &resp.Data[index].Attributes.Measurements[indexMeas], prior)
 				}
 
 				if usageQty == 0.0 {
@@ -212,14 +220,19 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 // cumulative usages are e.g., number of logs ingested, that have a fixed cost per unit
 // if a usage is cumulative, then suptract the usage in the hour prior to get the incremental usage
 // if a usage is a rate, then just return the usage
-func GetUsageQuantity(productFamily string, currentPeriodUsage, previousPeriodUsage datadogV2.HourlyUsageMeasurement) float32 {
+func GetUsageQuantity(productFamily string, currentPeriodUsage, previousPeriodUsage *datadogV2.HourlyUsageMeasurement) float32 {
 	curUsage := currentPeriodUsage.GetValue()
 	if _, found := rateFamilies[productFamily]; found {
 		// this family is a rate family, so just return the usage
 		return float32(curUsage)
 	}
 
-	prevUsage := previousPeriodUsage.GetValue()
+	prevUsage := int64(0)
+	if previousPeriodUsage == nil {
+		log.Warnf("previous period usage was nil, assuming 0 usage for that timeframe for family %s", productFamily)
+	} else {
+		prevUsage = previousPeriodUsage.GetValue()
+	}
 
 	return float32(curUsage - prevUsage)
 }
