@@ -90,7 +90,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("error building DD config: %v", err)
 	}
-
+	log.SetLogLevel(ddConfig.DDLogLevel)
 	// datadog usage APIs allow 10 requests every 30 seconds
 	rateLimiter := rate.NewLimiter(0.25, 5)
 	ddCostSrc := DatadogCostSource{
@@ -127,11 +127,13 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 	ccResp := boilerplateDDCustomCost(window)
 
 	nextPageId := "init"
+	nextPagePrevPeriodId := "init"
 	for morepages := true; morepages; morepages = (nextPageId != "") {
 		params := datadogV2.NewGetHourlyUsageOptionalParameters()
 		if nextPageId != "init" {
 			params.PageNextRecordId = &nextPageId
 		}
+
 		if d.rateLimiter.Tokens() < 1.0 {
 			log.Infof("datadog rate limit reached. holding request until rate capacity is back")
 		}
@@ -156,6 +158,9 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 		// where needed
 		params.FilterTimestampEnd = window.Start()
 		toSub := window.End().Sub(*window.Start())
+		if nextPagePrevPeriodId != "init" {
+			params.PageNextRecordId = &nextPagePrevPeriodId
+		}
 		respPriorWindow, r, err := d.usageApi.GetHourlyUsage(d.ddCtx, (*window.Start()).Add(-toSub), "all", *params)
 		if err != nil {
 			log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
@@ -170,6 +175,8 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 				if resp.Data[index].Attributes.Measurements[indexMeas].Value.IsSet() {
 					var prior *datadogV2.HourlyUsageMeasurement
 					if len(respPriorWindow.Data) > index {
+						log.Infof("getting prior window data from timeframe %v, and measurement %v", window, resp.Data[index].Attributes.Measurements[indexMeas])
+						log.Infof("prior window data: %v", respPriorWindow.Data[index])
 						prior = &respPriorWindow.Data[index].Attributes.Measurements[indexMeas]
 					} else {
 						// then this is an out of bound access
@@ -209,6 +216,12 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 			nextPageId = *resp.Meta.Pagination.NextRecordId.Get()
 		} else {
 			nextPageId = ""
+		}
+
+		if respPriorWindow.Meta != nil && respPriorWindow.Meta.Pagination != nil && respPriorWindow.Meta.Pagination.NextRecordId.IsSet() {
+			nextPagePrevPeriodId = *respPriorWindow.Meta.Pagination.NextRecordId.Get()
+		} else {
+			nextPagePrevPeriodId = ""
 		}
 	}
 
@@ -373,6 +386,10 @@ func getDatadogConfig(configFilePath string) (*datadogplugin.DatadogConfig, erro
 	err = json.Unmarshal(bytes, &result)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling json into DD config %v", err)
+	}
+
+	if result.DDLogLevel == "" {
+		result.DDLogLevel = "info"
 	}
 
 	return &result, nil

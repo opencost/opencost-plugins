@@ -72,6 +72,7 @@ func TestGetCustomCosts(t *testing.T) {
 		Resolution: durationpb.New(timeutil.Day),
 	}
 
+	log.SetLogLevel("debug")
 	resp := ddCostSrc.GetCustomCosts(req)
 
 	if len(resp) == 0 {
