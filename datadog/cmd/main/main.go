@@ -412,13 +412,13 @@ func scrapeDatadogPrices(url string) (*datadogplugin.PricingInformation, error) 
 	}
 	res := datadogplugin.DatadogProJSON{}
 	r := regexp.MustCompile(`var productDetailData = \s*(.*?)\s*;`)
-	log.Debugf("got response: %s", string(b))
+	log.Tracef("got response: %s", string(b))
 	matches := r.FindAllStringSubmatch(string(b), -1)
 	if len(matches) != 1 {
 		return nil, fmt.Errorf("requires exactly 1 product detail data, got %d", len(matches))
 	}
 
-	log.Debugf("matches[0][1]:" + matches[0][1])
+	log.Tracef("matches[0][1]:" + matches[0][1])
 	err = json.Unmarshal([]byte(matches[0][1]), &res)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read pricing page body: %v", err)
