@@ -90,7 +90,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("error building DD config: %v", err)
 	}
-
+	log.SetLogLevel(ddConfig.DDLogLevel)
 	// datadog usage APIs allow 10 requests every 30 seconds
 	rateLimiter := rate.NewLimiter(0.25, 5)
 	ddCostSrc := DatadogCostSource{
@@ -132,11 +132,12 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 		if nextPageId != "init" {
 			params.PageNextRecordId = &nextPageId
 		}
+
 		if d.rateLimiter.Tokens() < 1.0 {
 			log.Infof("datadog rate limit reached. holding request until rate capacity is back")
 		}
 
-		err := d.rateLimiter.WaitN(context.TODO(), 2)
+		err := d.rateLimiter.WaitN(context.TODO(), 1)
 		if err != nil {
 			log.Errorf("error waiting on rate limiter`: %v\n", err)
 			ccResp.Errors = append(ccResp.Errors, err.Error())
@@ -151,32 +152,12 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 			ccResp.Errors = append(ccResp.Errors, err.Error())
 		}
 
-		// many datadog usages are given in terms of a cumulative month to date usage
-		// therefore, make a call for the hour before this hour to get a comparison
-		// where needed
-		params.FilterTimestampEnd = window.Start()
-		toSub := window.End().Sub(*window.Start())
-		respPriorWindow, r, err := d.usageApi.GetHourlyUsage(d.ddCtx, (*window.Start()).Add(-toSub), "all", *params)
-		if err != nil {
-			log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
-			log.Errorf("Full HTTP response: %v\n", r)
-			ccResp.Errors = append(ccResp.Errors, err.Error())
-		}
-
 		for index := range resp.Data {
 			for indexMeas := range resp.Data[index].Attributes.Measurements {
 				usageQty := float32(0.0)
 
 				if resp.Data[index].Attributes.Measurements[indexMeas].Value.IsSet() {
-					var prior *datadogV2.HourlyUsageMeasurement
-					if len(respPriorWindow.Data) > index {
-						prior = &respPriorWindow.Data[index].Attributes.Measurements[indexMeas]
-					} else {
-						// then this is an out of bound access
-						log.Warnf("could not get prior window data from timeframe %v, and measurement %v", window, resp.Data[index].Attributes.Measurements[indexMeas])
-						log.Warnf("passing in nil prior window data")
-					}
-					usageQty = GetUsageQuantity(*resp.Data[index].Attributes.ProductFamily, &resp.Data[index].Attributes.Measurements[indexMeas], prior)
+					usageQty = float32(resp.Data[index].Attributes.Measurements[indexMeas].GetValue())
 				}
 
 				if usageQty == 0.0 {
@@ -213,28 +194,6 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 	}
 
 	return &ccResp
-}
-
-// we have two basic types usages: cumulative and rate
-// rate usages are e.g., number of infra hosts, that have fixed costs per hour
-// cumulative usages are e.g., number of logs ingested, that have a fixed cost per unit
-// if a usage is cumulative, then suptract the usage in the hour prior to get the incremental usage
-// if a usage is a rate, then just return the usage
-func GetUsageQuantity(productFamily string, currentPeriodUsage, previousPeriodUsage *datadogV2.HourlyUsageMeasurement) float32 {
-	curUsage := currentPeriodUsage.GetValue()
-	if _, found := rateFamilies[productFamily]; found {
-		// this family is a rate family, so just return the usage
-		return float32(curUsage)
-	}
-
-	prevUsage := int64(0)
-	if previousPeriodUsage == nil {
-		log.Warnf("previous period usage was nil, assuming 0 usage for that timeframe for family %s", productFamily)
-	} else {
-		prevUsage = previousPeriodUsage.GetValue()
-	}
-
-	return float32(curUsage - prevUsage)
 }
 
 // the public pricing used in the pricing list doesn't always match the usage reports
@@ -375,6 +334,10 @@ func getDatadogConfig(configFilePath string) (*datadogplugin.DatadogConfig, erro
 		return nil, fmt.Errorf("error marshaling json into DD config %v", err)
 	}
 
+	if result.DDLogLevel == "" {
+		result.DDLogLevel = "info"
+	}
+
 	return &result, nil
 }
 
@@ -412,13 +375,13 @@ func scrapeDatadogPrices(url string) (*datadogplugin.PricingInformation, error) 
 	}
 	res := datadogplugin.DatadogProJSON{}
 	r := regexp.MustCompile(`var productDetailData = \s*(.*?)\s*;`)
-	log.Debugf("got response: %s", string(b))
+	log.Tracef("got response: %s", string(b))
 	matches := r.FindAllStringSubmatch(string(b), -1)
 	if len(matches) != 1 {
 		return nil, fmt.Errorf("requires exactly 1 product detail data, got %d", len(matches))
 	}
 
-	log.Debugf("matches[0][1]:" + matches[0][1])
+	log.Tracef("matches[0][1]:" + matches[0][1])
 	err = json.Unmarshal([]byte(matches[0][1]), &res)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read pricing page body: %v", err)
