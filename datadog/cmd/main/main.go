@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"os"
 
@@ -125,7 +126,7 @@ func boilerplateDDCustomCost(win opencost.Window) pb.CustomCostResponse {
 }
 func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPricing *datadogplugin.PricingInformation) *pb.CustomCostResponse {
 	ccResp := boilerplateDDCustomCost(window)
-
+	costs := map[string]*pb.CustomCost{}
 	nextPageId := "init"
 	for morepages := true; morepages; morepages = (nextPageId != "") {
 		params := datadogV2.NewGetHourlyUsageOptionalParameters()
@@ -153,6 +154,7 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 		}
 
 		for index := range resp.Data {
+			// each of these entries gives hourly data steps
 			for indexMeas := range resp.Data[index].Attributes.Measurements {
 				usageQty := float32(0.0)
 
@@ -167,23 +169,32 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 
 				desc, usageUnit, pricing, currency := getListingInfo(window, *resp.Data[index].Attributes.ProductFamily, *resp.Data[index].Attributes.Measurements[indexMeas].UsageType, listPricing)
 				ccResp.Currency = currency
-				cost := pb.CustomCost{
-					Zone:               *resp.Data[index].Attributes.Region,
-					AccountName:        *resp.Data[index].Attributes.OrgName,
-					ChargeCategory:     "usage",
-					Description:        desc,
-					ResourceName:       *resp.Data[index].Attributes.Measurements[indexMeas].UsageType,
-					ResourceType:       *resp.Data[index].Attributes.ProductFamily,
-					Id:                 *resp.Data[index].Id,
-					ProviderId:         *resp.Data[index].Attributes.PublicId + "/" + *resp.Data[index].Attributes.Measurements[indexMeas].UsageType,
-					Labels:             map[string]string{},
-					ListCost:           usageQty * pricing,
-					ListUnitPrice:      pricing,
-					UsageQuantity:      usageQty,
-					UsageUnit:          usageUnit,
-					ExtendedAttributes: nil,
+				provId := *resp.Data[index].Attributes.PublicId + "/" + *resp.Data[index].Attributes.Measurements[indexMeas].UsageType
+				if cost, found := costs[provId]; found {
+					// we already have this cost type for the window, so just update the usages and costs
+					cost.UsageQuantity += usageQty
+					cost.ListCost += usageQty * pricing
+				} else {
+					// we have not encountered this cost type for this window yet, so create a new cost entry
+					cost := pb.CustomCost{
+						Zone:               *resp.Data[index].Attributes.Region,
+						AccountName:        *resp.Data[index].Attributes.OrgName,
+						ChargeCategory:     "usage",
+						Description:        desc,
+						ResourceName:       *resp.Data[index].Attributes.Measurements[indexMeas].UsageType,
+						ResourceType:       *resp.Data[index].Attributes.ProductFamily,
+						Id:                 *resp.Data[index].Id,
+						ProviderId:         provId,
+						Labels:             map[string]string{},
+						ListCost:           usageQty * pricing,
+						ListUnitPrice:      pricing,
+						UsageQuantity:      usageQty,
+						UsageUnit:          usageUnit,
+						ExtendedAttributes: nil,
+					}
+					costs[provId] = &cost
 				}
-				ccResp.Costs = append(ccResp.Costs, &cost)
+
 			}
 		}
 		if resp.Meta != nil && resp.Meta.Pagination != nil && resp.Meta.Pagination.NextRecordId.IsSet() {
@@ -192,8 +203,146 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 			nextPageId = ""
 		}
 	}
+	allCosts := []*pb.CustomCost{}
+	for _, cost := range costs {
+		allCosts = append(allCosts, cost)
+	}
+	ccResp.Costs = allCosts
 
+	// post processing
+	// datadog's usage API sometimes provides usages that get counted multiple times
+	// this post processing stage de-duplicates those usages and costs
+	postProcess(&ccResp)
 	return &ccResp
+}
+
+func postProcess(ccResp *pb.CustomCostResponse) {
+	if ccResp == nil {
+		return
+	}
+
+	ccResp.Costs = processInfraHosts(ccResp.Costs)
+
+	ccResp.Costs = processLogUsage(ccResp.Costs)
+
+	// removes any items that have 0 usage, either because of post processing or otherwise
+	ccResp.Costs = removeZeroUsages(ccResp.Costs)
+}
+
+// removes any items that have 0 usage, either because of post processing or otherwise
+func removeZeroUsages(costs []*pb.CustomCost) []*pb.CustomCost {
+	for index := 0; index < len(costs); index++ {
+		if costs[index].UsageQuantity < 0.001 {
+			log.Debugf("removing cost %s because it has 0 usage", costs[index].ProviderId)
+			costs = append(costs[:index], costs[index+1:]...)
+			index = 0
+		}
+	}
+	return costs
+}
+
+func processInfraHosts(costs []*pb.CustomCost) []*pb.CustomCost {
+	// remove the container_count_excl_agent item
+	// subtract the container_count_excl_agent from the container_count
+	// re-add as a synthetic 'agent container' item
+	var cc *pb.CustomCost
+	for index := range costs {
+		if costs[index].ResourceName == "container_count" {
+			cc = costs[index]
+			costs = append(costs[:index], costs[index+1:]...)
+			break
+		}
+	}
+
+	if cc != nil {
+		numAgents := float32(0.0)
+		for index := range costs {
+			if costs[index].ResourceName == "container_count_excl_agent" {
+				numAgents = float32(cc.UsageQuantity) - float32(costs[index].UsageQuantity)
+				break
+			}
+		}
+
+		cc.Description = "agent container"
+		cc.UsageQuantity = numAgents
+		cc.ResourceName = "agent_container"
+		cc.ListCost = numAgents * cc.ListUnitPrice
+
+		costs = append(costs, cc)
+	}
+
+	// remove the host_count item
+	// subtract the agent_cost_count from host_count item
+	// remaining gets put into a 'other hosts' item count
+	var hc *pb.CustomCost
+	for index := range costs {
+		if costs[index].ResourceName == "host_count" {
+			hc = costs[index]
+			costs = append(costs[:index], costs[index+1:]...)
+			break
+		}
+	}
+
+	if hc != nil {
+		otherHosts := float32(0.0)
+		for index := range costs {
+			if costs[index].ResourceName == "agent_host_count" {
+				otherHosts = float32(hc.UsageQuantity) - float32(costs[index].UsageQuantity)
+				break
+			}
+		}
+
+		hc.Description = "other hosts"
+		hc.UsageQuantity = otherHosts
+		hc.ResourceName = "other_hosts"
+		hc.ListCost = otherHosts * hc.ListUnitPrice
+		costs = append(costs, hc)
+	}
+	return costs
+}
+
+func processLogUsage(costs []*pb.CustomCost) []*pb.CustomCost {
+
+	for index := range costs {
+		if costs[index].ResourceName == "logs_live_indexed_events_15_day_count" {
+			costs = append(costs[:index], costs[index+1:]...)
+			break
+		}
+	}
+
+	// remove live indexed events count, that is covered by the other categories
+	for index := range costs {
+		if costs[index].ResourceName == "logs_live_indexed_count" {
+			costs = append(costs[:index], costs[index+1:]...)
+			break
+		}
+	}
+
+	var logsIndexed *pb.CustomCost
+	for index := range costs {
+		if costs[index].ResourceName == "indexed_events_count" {
+			logsIndexed = costs[index]
+			costs = append(costs[:index], costs[index+1:]...)
+			break
+		}
+	}
+
+	if logsIndexed != nil {
+		leftoverLogs := float32(0.0)
+		for index := range costs {
+			if costs[index].ResourceName == "logs_indexed_events_15_day_count" {
+				leftoverLogs = float32(logsIndexed.UsageQuantity) - float32(costs[index].UsageQuantity)
+				break
+			}
+		}
+
+		logsIndexed.Description = "other log events"
+		logsIndexed.UsageQuantity = leftoverLogs
+		logsIndexed.ResourceName = "other_log_events"
+		logsIndexed.ListCost = leftoverLogs * logsIndexed.ListUnitPrice
+		costs = append(costs, logsIndexed)
+	}
+	return costs
 }
 
 // the public pricing used in the pricing list doesn't always match the usage reports
@@ -240,6 +389,7 @@ var pricingMap = map[string]float64{
 var rateFamilies = map[string]int{
 	"infra_hosts": 730.0,
 	"apm_hosts":   730.0,
+	"containers":  730.0,
 }
 
 func getListingInfo(window opencost.Window, productfamily string, usageType string, listPricing *datadogplugin.PricingInformation) (description string, usageUnit string, pricing float32, currency string) {
@@ -273,7 +423,11 @@ func getListingInfo(window opencost.Window, productfamily string, usageType stri
 			if hourlyPriceDenominator, found := rateFamilies[pricingKey]; found {
 				// adjust the pricing to fit the window duration
 				pricingPerHour := float32(pricingFloat) / float32(hourlyPriceDenominator)
-				pricing = pricingPerHour * float32(window.Duration().Hours())
+				pricingPerWindow := pricingPerHour //* float32(window.Duration().Hours())
+				usageUnit = strings.TrimSuffix(usageUnit, "s")
+				usageUnit += " - hours"
+				pricing = pricingPerWindow
+				return
 			} else {
 				// if the family is a cumulative family, then the pricing is per unit
 				// check for a scale factor on the pricing
@@ -282,6 +436,7 @@ func getListingInfo(window opencost.Window, productfamily string, usageType stri
 				} else {
 					pricing = float32(pricingFloat)
 				}
+				return
 			}
 
 		}
