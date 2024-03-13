@@ -127,7 +127,6 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 	ccResp := boilerplateDDCustomCost(window)
 
 	nextPageId := "init"
-	nextPagePrevPeriodId := "init"
 	for morepages := true; morepages; morepages = (nextPageId != "") {
 		params := datadogV2.NewGetHourlyUsageOptionalParameters()
 		if nextPageId != "init" {
@@ -138,7 +137,7 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 			log.Infof("datadog rate limit reached. holding request until rate capacity is back")
 		}
 
-		err := d.rateLimiter.WaitN(context.TODO(), 2)
+		err := d.rateLimiter.WaitN(context.TODO(), 1)
 		if err != nil {
 			log.Errorf("error waiting on rate limiter`: %v\n", err)
 			ccResp.Errors = append(ccResp.Errors, err.Error())
@@ -153,37 +152,12 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 			ccResp.Errors = append(ccResp.Errors, err.Error())
 		}
 
-		// many datadog usages are given in terms of a cumulative month to date usage
-		// therefore, make a call for the hour before this hour to get a comparison
-		// where needed
-		params.FilterTimestampEnd = window.Start()
-		toSub := window.End().Sub(*window.Start())
-		if nextPagePrevPeriodId != "init" {
-			params.PageNextRecordId = &nextPagePrevPeriodId
-		}
-		respPriorWindow, r, err := d.usageApi.GetHourlyUsage(d.ddCtx, (*window.Start()).Add(-toSub), "all", *params)
-		if err != nil {
-			log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
-			log.Errorf("Full HTTP response: %v\n", r)
-			ccResp.Errors = append(ccResp.Errors, err.Error())
-		}
-
 		for index := range resp.Data {
 			for indexMeas := range resp.Data[index].Attributes.Measurements {
 				usageQty := float32(0.0)
 
 				if resp.Data[index].Attributes.Measurements[indexMeas].Value.IsSet() {
-					var prior *datadogV2.HourlyUsageMeasurement
-					if len(respPriorWindow.Data) > index {
-						log.Infof("getting prior window data from timeframe %v, and measurement %v", window, resp.Data[index].Attributes.Measurements[indexMeas])
-						log.Infof("prior window data: %v", respPriorWindow.Data[index])
-						prior = &respPriorWindow.Data[index].Attributes.Measurements[indexMeas]
-					} else {
-						// then this is an out of bound access
-						log.Warnf("could not get prior window data from timeframe %v, and measurement %v", window, resp.Data[index].Attributes.Measurements[indexMeas])
-						log.Warnf("passing in nil prior window data")
-					}
-					usageQty = GetUsageQuantity(*resp.Data[index].Attributes.ProductFamily, &resp.Data[index].Attributes.Measurements[indexMeas], prior)
+					usageQty = float32(resp.Data[index].Attributes.Measurements[indexMeas].GetValue())
 				}
 
 				if usageQty == 0.0 {
@@ -217,37 +191,9 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 		} else {
 			nextPageId = ""
 		}
-
-		if respPriorWindow.Meta != nil && respPriorWindow.Meta.Pagination != nil && respPriorWindow.Meta.Pagination.NextRecordId.IsSet() {
-			nextPagePrevPeriodId = *respPriorWindow.Meta.Pagination.NextRecordId.Get()
-		} else {
-			nextPagePrevPeriodId = ""
-		}
 	}
 
 	return &ccResp
-}
-
-// we have two basic types usages: cumulative and rate
-// rate usages are e.g., number of infra hosts, that have fixed costs per hour
-// cumulative usages are e.g., number of logs ingested, that have a fixed cost per unit
-// if a usage is cumulative, then suptract the usage in the hour prior to get the incremental usage
-// if a usage is a rate, then just return the usage
-func GetUsageQuantity(productFamily string, currentPeriodUsage, previousPeriodUsage *datadogV2.HourlyUsageMeasurement) float32 {
-	curUsage := currentPeriodUsage.GetValue()
-	if _, found := rateFamilies[productFamily]; found {
-		// this family is a rate family, so just return the usage
-		return float32(curUsage)
-	}
-
-	prevUsage := int64(0)
-	if previousPeriodUsage == nil {
-		log.Warnf("previous period usage was nil, assuming 0 usage for that timeframe for family %s", productFamily)
-	} else {
-		prevUsage = previousPeriodUsage.GetValue()
-	}
-
-	return float32(curUsage - prevUsage)
 }
 
 // the public pricing used in the pricing list doesn't always match the usage reports
