@@ -217,8 +217,8 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 
 	// query from the first of the window's month until the window end's day so that we can properly adjust for the
 	// cumulative nature of the response
-	startDate := time.Date(window.Start().Year(), window.Start().Month(), 1, 0, 0, 0, 0, window.Start().Location())
-	endDate := time.Date(window.End().Year(), window.End().Month(), window.End().Day(), 0, 0, 0, 0, window.End().Location())
+	startDate := time.Date(window.Start().Year(), window.Start().Month(), 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(window.End().Year(), window.End().Month(), window.End().Day(), 0, 0, 0, 0, time.UTC)
 
 	view := "sub-org"
 	params := datadogV2.NewGetEstimatedCostByOrgOptionalParameters()
@@ -234,7 +234,20 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 
 	previousChargeCosts := make(map[string]float32)
 
-	isDaily := window.Duration().Hours() == 24
+	// estimated costs from datadog are per-day, so we scale in the event that we want hourly costs
+	var costFactor float32
+	switch window.Duration().Hours() {
+	case 24:
+		costFactor = 1.0
+	case 1:
+		costFactor = 1.0 / 24.0
+	default:
+		err = fmt.Errorf("unsupported window duration: %v hours", window.Duration().Hours())
+
+		log.Errorf("%v\n", err)
+		ccResp.Errors = append(ccResp.Errors, err.Error())
+		return &ccResp
+	}
 
 	costs = map[string]*pb.CustomCost{}
 	for _, costResp := range resp.Data {
@@ -254,10 +267,7 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 			}
 			previousChargeCosts[*charge.ProductName] = chargeCost
 
-			if !isDaily {
-				// uniformly distribute the cost over the whole day
-				adjustedChargeCost /= 24
-			}
+			adjustedChargeCost *= costFactor
 
 			if attributes.Date.Day() != window.Start().Day() {
 				continue
