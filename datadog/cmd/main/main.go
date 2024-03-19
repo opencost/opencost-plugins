@@ -213,6 +213,53 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 	// datadog's usage API sometimes provides usages that get counted multiple times
 	// this post processing stage de-duplicates those usages and costs
 	postProcess(&ccResp)
+
+	view := "sub-org"
+	params := datadogV2.NewGetEstimatedCostByOrgOptionalParameters()
+	params.StartDate = window.Start()
+	params.EndDate = window.End()
+	params.View = &view
+	resp, r, err := d.usageApi.GetEstimatedCostByOrg(d.ddCtx, *params)
+	if err != nil {
+		log.Errorf("Error when calling `UsageMeteringApi.GetEstimatedCostByOrg`: %v\n", err)
+		log.Errorf("Full HTTP response: %v\n", r)
+		ccResp.Errors = append(ccResp.Errors, err.Error())
+	}
+
+	costs = map[string]*pb.CustomCost{}
+	for _, costResp := range resp.Data {
+		attributes := costResp.Attributes
+		for _, charge := range attributes.Charges {
+			chargeCost := float32(*charge.Cost)
+			if chargeCost == 0 {
+				continue
+			}
+
+			provId := *attributes.PublicId + "/" + *charge.ProductName
+			if cost, found := costs[provId]; found {
+				// we already have this cost type for the window, so just update the billed cost
+				cost.BilledCost += float32(*charge.Cost)
+			} else {
+				// we have not encountered this cost type for this window yet, so create a new cost entry
+				cost := pb.CustomCost{
+					Zone:               *attributes.Region,
+					AccountName:        *attributes.OrgName,
+					ChargeCategory:     *charge.ChargeType,
+					ResourceName:       *charge.ProductName,
+					Id:                 *costResp.Id,
+					ProviderId:         provId,
+					Labels:             map[string]string{},
+					BilledCost:         chargeCost,
+					ExtendedAttributes: nil,
+				}
+				costs[provId] = &cost
+			}
+		}
+	}
+	for _, cost := range costs {
+		ccResp.Costs = append(ccResp.Costs, cost)
+	}
+
 	return &ccResp
 }
 

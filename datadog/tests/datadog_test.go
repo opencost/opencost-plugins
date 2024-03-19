@@ -3,6 +3,7 @@ package tests
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/opencost/opencost/core/pkg/util/timeutil"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -19,71 +20,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// this test gets DD keys from env vars, writes a config file
-// then it invokes the plugin and validates some basics
-// in the response
-func TestDDCostRetrieval(t *testing.T) {
-	// read necessary env vars. If any are missing, log warning and skip test
-	ddSite := os.Getenv("DD_SITE")
-	ddApiKey := os.Getenv("DD_API_KEY")
-	ddAppKey := os.Getenv("DD_APPLICATION_KEY")
-
-	if ddSite == "" {
-		log.Warnf("DD_SITE undefined, this needs to have the URL of your DD instance, skipping test")
-		t.Skip()
-		return
-	}
-
-	if ddApiKey == "" {
-		log.Warnf("DD_API_KEY undefined, skipping test")
-		t.Skip()
-		return
-	}
-
-	if ddAppKey == "" {
-		log.Warnf("DD_APPLICATION_KEY undefined, skipping test")
-		t.Skip()
-		return
-	}
-
-	// write out config to temp file using contents of env vars
-	config := datadogplugin.DatadogConfig{
-		DDSite:   ddSite,
-		DDAPIKey: ddApiKey,
-		DDAppKey: ddAppKey,
-	}
-
-	// set up custom cost request
-	file, err := os.CreateTemp("", "datadog_config.json")
-	if err != nil {
-		t.Fatalf("could not create temp config dir: %v", err)
-	}
-	defer os.Remove(file.Name())
-	data, err := json.MarshalIndent(config, "", " ")
-	if err != nil {
-		t.Fatalf("could not marshal json: %v", err)
-	}
-
-	err = os.WriteFile(file.Name(), data, fs.FileMode(os.O_RDWR))
-	if err != nil {
-		t.Fatalf("could not write file: %v", err)
-	}
-
-	// invoke plugin via harness
-	_, filename, _, _ := runtime.Caller(0)
-	parent := filepath.Dir(filename)
-	pluginRoot := filepath.Dir(parent)
-	pluginFile := pluginRoot + "/cmd/main/main.go"
-	windowStart := time.Date(2024, 3, 8, 0, 0, 0, 0, time.UTC)
+func TestDDCostRetrievalListCost(t *testing.T) {
 	// query for qty 2 of 1 hour windows
+	windowStart := time.Date(2024, 3, 8, 0, 0, 0, 0, time.UTC)
 	windowEnd := time.Date(2024, 3, 8, 2, 0, 0, 0, time.UTC)
 
-	req := pb.CustomCostRequest{
-		Start:      timestamppb.New(windowStart),
-		End:        timestamppb.New(windowEnd),
-		Resolution: durationpb.New(time.Hour),
-	}
-	response := harness.InvokePlugin(file.Name(), pluginFile, &req)
+	response := getResponse(t, windowStart, windowEnd, time.Hour)
 
 	// confirm no errors in result
 	if len(response) == 0 {
@@ -123,10 +65,120 @@ func TestDDCostRetrieval(t *testing.T) {
 						cost,
 					)
 					t.Fatalf("unexpectedly high cost for indexed logs: %f", cost.ListCost)
-
 				}
 			}
 		}
 	}
+}
 
+func TestDDCostRetrievalBilledCost(t *testing.T) {
+	// query for qty 2 of 1 hour windows
+	windowStart := time.Date(2024, 3, 16, 0, 0, 0, 0, time.UTC)
+	windowEnd := time.Date(2024, 3, 17, 0, 0, 0, 0, time.UTC)
+
+	response := getResponse(t, windowStart, windowEnd, timeutil.Day)
+
+	// confirm no errors in result
+	if len(response) == 0 {
+		t.Fatalf("empty response")
+	}
+	for _, resp := range response {
+		if len(resp.Errors) > 0 {
+			t.Fatalf("got errors in response: %v", resp.Errors)
+		}
+	}
+
+	result, err := json.MarshalIndent(response, "", "    ")
+	if err != nil {
+		t.Fatalf("error json-ing response: %v", err)
+	}
+
+	fmt.Println(string(result))
+	// confirm results have correct provider
+	for _, resp := range response {
+		if resp.Domain != "datadog" {
+			t.Fatalf("unexpected domain. expected datadog, got %s", resp.Domain)
+		}
+	}
+
+	// check some attributes of the cost response
+	var totalBilledCost float32 = 0.0
+	for _, resp := range response {
+		// confirm there are > 0 custom costs
+		if len(resp.Costs) < 1 {
+			t.Fatalf("expect non-zero costs in response.")
+		}
+
+		for _, cost := range resp.Costs {
+			totalBilledCost += cost.BilledCost
+		}
+	}
+
+	if totalBilledCost == 0 {
+		spew.Dump(
+			response,
+		)
+		t.Fatalf("unexpectedly low total billed cost: %f", totalBilledCost)
+	}
+}
+
+func getResponse(t *testing.T, windowStart, windowEnd time.Time, step time.Duration) []*pb.CustomCostResponse {
+	// read necessary env vars. If any are missing, log warning and skip test
+	ddSite := os.Getenv("DD_SITE")
+	ddApiKey := os.Getenv("DD_API_KEY")
+	ddAppKey := os.Getenv("DD_APPLICATION_KEY")
+
+	if ddSite == "" {
+		log.Warnf("DD_SITE undefined, this needs to have the URL of your DD instance, skipping test")
+		t.Skip()
+		return nil
+	}
+
+	if ddApiKey == "" {
+		log.Warnf("DD_API_KEY undefined, skipping test")
+		t.Skip()
+		return nil
+	}
+
+	if ddAppKey == "" {
+		log.Warnf("DD_APPLICATION_KEY undefined, skipping test")
+		t.Skip()
+		return nil
+	}
+
+	// write out config to temp file using contents of env vars
+	config := datadogplugin.DatadogConfig{
+		DDSite:   ddSite,
+		DDAPIKey: ddApiKey,
+		DDAppKey: ddAppKey,
+	}
+
+	// set up custom cost request
+	file, err := os.CreateTemp("", "datadog_config.json")
+	if err != nil {
+		t.Fatalf("could not create temp config dir: %v", err)
+	}
+	defer os.Remove(file.Name())
+	data, err := json.MarshalIndent(config, "", " ")
+	if err != nil {
+		t.Fatalf("could not marshal json: %v", err)
+	}
+
+	err = os.WriteFile(file.Name(), data, fs.FileMode(os.O_RDWR))
+	if err != nil {
+		t.Fatalf("could not write file: %v", err)
+	}
+
+	// invoke plugin via harness
+	_, filename, _, _ := runtime.Caller(0)
+	parent := filepath.Dir(filename)
+	pluginRoot := filepath.Dir(parent)
+	pluginFile := pluginRoot + "/cmd/main/main.go"
+
+	req := pb.CustomCostRequest{
+		Start:      timestamppb.New(windowStart),
+		End:        timestamppb.New(windowEnd),
+		Resolution: durationpb.New(step),
+	}
+	return harness.InvokePlugin(file.Name(), pluginFile, &req)
 }
