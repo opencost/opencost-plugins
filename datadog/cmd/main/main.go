@@ -217,8 +217,8 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 
 	// query from the first of the window's month until the window end's day so that we can properly adjust for the
 	// cumulative nature of the response
-	startDate := time.Date(window.Start().Year(), window.Start().Month(), 1, 0, 0, 0, 0, time.UTC)
-	endDate := time.Date(window.End().Year(), window.End().Month(), window.End().Day(), 0, 0, 0, 0, time.UTC)
+	startDate := time.Date(window.Start().UTC().Year(), window.Start().UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(window.End().UTC().Year(), window.End().UTC().Month(), window.End().UTC().Day(), 0, 0, 0, 0, time.UTC)
 
 	view := "sub-org"
 	params := datadogV2.NewGetEstimatedCostByOrgOptionalParameters()
