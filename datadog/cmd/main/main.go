@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"os"
 
@@ -213,6 +214,90 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 	// datadog's usage API sometimes provides usages that get counted multiple times
 	// this post processing stage de-duplicates those usages and costs
 	postProcess(&ccResp)
+
+	// query from the first of the window's month until the window end's day so that we can properly adjust for the
+	// cumulative nature of the response
+	startDate := time.Date(window.Start().UTC().Year(), window.Start().UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(window.End().UTC().Year(), window.End().UTC().Month(), window.End().UTC().Day(), 0, 0, 0, 0, time.UTC)
+
+	view := "sub-org"
+	params := datadogV2.NewGetEstimatedCostByOrgOptionalParameters()
+	params.StartDate = &startDate
+	params.EndDate = &endDate
+	params.View = &view
+	resp, r, err := d.usageApi.GetEstimatedCostByOrg(d.ddCtx, *params)
+	if err != nil {
+		log.Errorf("Error when calling `UsageMeteringApi.GetEstimatedCostByOrg`: %v\n", err)
+		log.Errorf("Full HTTP response: %v\n", r)
+		ccResp.Errors = append(ccResp.Errors, err.Error())
+	}
+
+	previousChargeCosts := make(map[string]float32)
+
+	// estimated costs from datadog are per-day, so we scale in the event that we want hourly costs
+	var costFactor float32
+	switch window.Duration().Hours() {
+	case 24:
+		costFactor = 1.0
+	case 1:
+		costFactor = 1.0 / 24.0
+	default:
+		err = fmt.Errorf("unsupported window duration: %v hours", window.Duration().Hours())
+
+		log.Errorf("%v\n", err)
+		ccResp.Errors = append(ccResp.Errors, err.Error())
+		return &ccResp
+	}
+
+	costs = map[string]*pb.CustomCost{}
+	for _, costResp := range resp.Data {
+		attributes := costResp.Attributes
+		for _, charge := range attributes.Charges {
+			chargeCost := float32(*charge.Cost)
+			// we only care about non-zero totals. by filtering out non-totals, we avoid duplicate costs from the
+			// datadog response
+			if (chargeCost == 0) || (*charge.ChargeType != "total") {
+				continue
+			}
+
+			// adjust the charge cost, as the charges are cumulative throughout the response
+			adjustedChargeCost := chargeCost
+			if _, ok := previousChargeCosts[*charge.ProductName]; ok {
+				adjustedChargeCost -= previousChargeCosts[*charge.ProductName]
+			}
+			previousChargeCosts[*charge.ProductName] = chargeCost
+
+			adjustedChargeCost *= costFactor
+
+			if attributes.Date.Day() != window.Start().Day() {
+				continue
+			}
+
+			provId := *attributes.PublicId + "/" + *charge.ProductName
+			if cost, found := costs[provId]; found {
+				// we already have this cost type for the window, so just update the billed cost
+				cost.BilledCost += adjustedChargeCost
+			} else {
+				// we have not encountered this cost type for this window yet, so create a new cost entry
+				cost := pb.CustomCost{
+					Zone:               *attributes.Region,
+					AccountName:        *attributes.OrgName,
+					ChargeCategory:     "billing",
+					ResourceName:       *charge.ProductName,
+					Id:                 *costResp.Id,
+					ProviderId:         provId,
+					Labels:             map[string]string{},
+					BilledCost:         adjustedChargeCost,
+					ExtendedAttributes: nil,
+				}
+				costs[provId] = &cost
+			}
+		}
+	}
+	for _, cost := range costs {
+		ccResp.Costs = append(ccResp.Costs, cost)
+	}
+
 	return &ccResp
 }
 
