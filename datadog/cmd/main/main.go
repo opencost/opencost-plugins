@@ -231,14 +231,14 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 		attributes := costResp.Attributes
 		for _, charge := range attributes.Charges {
 			chargeCost := float32(*charge.Cost)
-			if chargeCost == 0 {
+			if (chargeCost == 0) || (*charge.ChargeType != "total") {
 				continue
 			}
 
 			provId := *attributes.PublicId + "/" + *charge.ProductName
 			if cost, found := costs[provId]; found {
 				// we already have this cost type for the window, so just update the billed cost
-				cost.BilledCost += float32(*charge.Cost)
+				cost.BilledCost += chargeCost
 			} else {
 				// we have not encountered this cost type for this window yet, so create a new cost entry
 				cost := pb.CustomCost{
