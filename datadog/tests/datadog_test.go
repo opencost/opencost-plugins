@@ -42,7 +42,7 @@ func TestDDCostRetrievalListCost(t *testing.T) {
 		t.Fatalf("error json-ing response: %v", err)
 	}
 
-	fmt.Println(string(result))
+	t.Log(string(result))
 	// confirm results have correct provider
 	for _, resp := range response {
 		if resp.Domain != "datadog" {
@@ -61,9 +61,8 @@ func TestDDCostRetrievalListCost(t *testing.T) {
 			if cost.ResourceType == "indexed_logs" {
 				// check for sane values fo a rate-priced resource
 				if cost.ListCost > 1000 {
-					spew.Dump(
-						cost,
-					)
+					costDump := spew.Sdump(cost)
+					t.Log(costDump)
 					t.Fatalf("unexpectedly high cost for indexed logs: %f", cost.ListCost)
 				}
 			}
@@ -115,9 +114,8 @@ func TestDDCostRetrievalBilledCost(t *testing.T) {
 	}
 
 	if totalBilledCost == 0 {
-		spew.Dump(
-			response,
-		)
+		responseDump := spew.Sdump(response)
+		t.Log(responseDump)
 		t.Fatalf("unexpectedly low total billed cost: %f", totalBilledCost)
 	}
 }
