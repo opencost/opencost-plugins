@@ -73,6 +73,12 @@ func (d *DatadogCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Cust
 	}
 
 	for _, target := range targets {
+		// DataDog gets mad if we ask them to tell the future
+		if target.Start().After(time.Now().UTC()) {
+			log.Debugf("skipping future window %v", target)
+			continue
+		}
+
 		log.Debugf("fetching DD costs for window %v", target)
 		result := d.getDDCostsForWindow(target, listPricing)
 		results = append(results, result)

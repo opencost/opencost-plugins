@@ -70,6 +70,24 @@ func TestDDCostRetrievalListCost(t *testing.T) {
 	}
 }
 
+func TestFuturism(t *testing.T) {
+	// query for the future
+	windowStart := time.Now().UTC().Truncate(time.Hour).Add(time.Hour)
+	windowEnd := windowStart.Add(time.Hour)
+
+	response := getResponse(t, windowStart, windowEnd, time.Hour)
+
+	// when we query for data in the future, we expect to get back no data AND no errors
+	if len(response) > 0 {
+		t.Fatalf("got non-empty response")
+	}
+	for _, resp := range response {
+		if len(resp.Errors) > 0 {
+			t.Fatalf("got errors in response: %v", resp.Errors)
+		}
+	}
+}
+
 func TestDDCostRetrievalBilledCost(t *testing.T) {
 	// query for qty 2 of 1 hour windows
 	windowStart := time.Date(2024, 3, 16, 0, 0, 0, 0, time.UTC)
