@@ -1,7 +1,7 @@
 
 # OpenCost Plugins
 
-OpenCost plugins make extending [OpenCost](https://github.com/opencost/opencost)’s coverage into new external cost sources (e.g. monitoring, data platforms, cloud services, and other SaaS solutions) available to the open source community. They allow for the ingestion of arbitrary cost data into OpenCost through the conformance of the [FOCUS spec](https://focus.finops.org/).
+OpenCost plugins make extending [OpenCost](https://github.com/opencost/opencost)’s coverage into new external cost sources (e.g. monitoring, data platforms, cloud services, and other SaaS solutions) available to the open source community. They allow for the ingestion of arbitrary cost data into OpenCost through conformance to the [FOCUS spec](https://focus.finops.org/).
 
 # How plugins work
 
