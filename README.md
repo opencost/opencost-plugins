@@ -12,6 +12,13 @@ Any plugin released within this repository can be deployed alongside OpenCost. W
 
 The plugins are expected to return a [response](https://github.com/opencost/opencost/blob/531641e608f404bbdc756c5dd291a44367053190/protos/customcost/messages.proto#L28-L54) that conforms to the aforementioned FOCUS spec for the given window and resolution. OpenCost will then store the response, and continue to request data for further time ranges.
 
+The FOCUS spec is broken up into two parts:
+- [`CustomCost`](https://github.com/opencost/opencost/blob/531641e608f404bbdc756c5dd291a44367053190/protos/customcost/messages.proto#L56-L99)
+- [`CustomCostExtendedAttributes`](https://github.com/opencost/opencost/blob/531641e608f404bbdc756c5dd291a44367053190/protos/customcost/messages.proto#L101-L150)
+  Plugin development only necessitates the implementation of the `CustomCost` response. Extended attributes are an optional response object. However, we high encourage the use of extended attributes, as doing so will assist us in developing the UX of said attributes within OpenCost.
+
+See [this ExcaliDraw diagram](https://app.excalidraw.com/l/ABLQ24dkKai/CBEQtjH6Mr) for a more details overview of the plugin system
+
 # Creating a new plugin
 
 At the most basic level, all a plugin needs to do is gather cost data given a time window and resolution. The logistics of this are straightforward, but the complexity of the implementation will depend on the data source in question.
@@ -41,6 +48,7 @@ Once the configuration is designed, it's time to write the plugin. Within `<repo
     - [First](https://github.com/opencost/opencost-plugins/blob/00809062196b79ce354a5cdafaba1d6ed3f132f9/datadog/cmd/main/main.go#L52), we split the requested window into sub-windows given the requested resolution. OpenCost has a convenience function to perform this split for us ([`GetWindows`](https://github.com/opencost/opencost/blob/b9f5e42f17ae5b1b05b722dd04502bd307a6a25c/core/pkg/opencost/window.go#L1084)).
     - [Next](https://github.com/opencost/opencost-plugins/blob/00809062196b79ce354a5cdafaba1d6ed3f132f9/datadog/cmd/main/main.go#L63), we grab some pricing data from the Datadog API to prepare for the next step.
     - [Penultimately](https://github.com/opencost/opencost-plugins/blob/00809062196b79ce354a5cdafaba1d6ed3f132f9/datadog/cmd/main/main.go#L75-L85), we iterate through each sub-window, grabbing the cost data from the Datadog API for each one.
+        - Optionally (but recommended), implement your response data such that the custom cost extended attributes are utilized as much as possible.
     - [Finally](https://github.com/opencost/opencost-plugins/blob/00809062196b79ce354a5cdafaba1d6ed3f132f9/datadog/cmd/main/main.go#L87), we return the retrieved cost data.
 - Implement the `main` function:
     - Find the config file ([Datadog reference](https://github.com/opencost/opencost-plugins/blob/main/datadog/cmd/main/main.go#L92)).
@@ -56,3 +64,8 @@ Add a new line to the [`opencost-plugins` manifest](https://github.com/opencost/
 
 ## Submit it!
 Now that your plugin is implemented and tested, all that's left is to get it submitted for review. Create a PR based off your branch and submit it, and an OpenCost developer will review it for you.
+
+## Plugin system limitations
+- OpenCost stores the plugin responses in an in-memory repository, which necessitates that OpenCost queries the plugins again for cost data upon pod restart.
+- Many cost sources have API rate limits, such as Datadog. As such, a rate limiter may be necessary.
+- If you want a plugin embedded in your OpenCost image, you will have to build the image yourself.
