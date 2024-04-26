@@ -1,5 +1,5 @@
 ---
-name: OpenCost Bug report
+name: OpenCost Plugins Bug report
 about: Create a report to help us improve
 title: ''
 labels: ''
@@ -8,7 +8,7 @@ assignees: ''
 ---
 
 **Describe the bug**
-A clear and concise description of what the OpenCost bug is. Please ensure this is an issue related to the OpenCost cost model, API, UI or specification. Public Kubecost bugs may be opened at https://github.com/kubecost/cost-analyzer-helm-chart/ 
+A clear and concise description of what the OpenCost Plugins bug is.
 
 **To Reproduce**
 Steps to reproduce the behavior:
@@ -23,8 +23,8 @@ A clear and concise description of what you expected to happen.
 **Screenshots**
 If applicable, add screenshots to help explain your problem.
 
-**Which version of OpenCost are you using?**
-This may be the Kubecost release.
+**Which version of OpenCost Plugins are you using?**
+
 
 **Additional context**
-Add any other context about the problem here. Kubernetes versions and which public clouds you are working with are especially important.
+Add any other context about the problem here.
