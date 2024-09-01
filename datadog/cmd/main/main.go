@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/hashicorp/go-plugin"
+	commonconfig "github.com/opencost/opencost-plugins/common/config"
 	datadogplugin "github.com/opencost/opencost-plugins/datadog/datadogplugin"
 	"github.com/opencost/opencost/core/pkg/log"
 	"github.com/opencost/opencost/core/pkg/model/pb"
@@ -89,7 +90,7 @@ func (d *DatadogCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Cust
 
 func main() {
 
-	configFile, err := getConfigFilePath()
+	configFile, err := commonconfig.GetConfigFilePath()
 	if err != nil {
 		log.Fatalf("error opening config file: %v", err)
 	}
@@ -585,22 +586,6 @@ func getDatadogConfig(configFilePath string) (*datadogplugin.DatadogConfig, erro
 	}
 
 	return &result, nil
-}
-
-func getConfigFilePath() (string, error) {
-	// plugins expect exactly 2 args: the executable itself,
-	// and a path to the config file to use
-	// all config for the plugin must come through the config file
-	if len(os.Args) != 2 {
-		return "", fmt.Errorf("plugins require 2 args: the plugin itself, and the full path to its config file. Got %d args", len(os.Args))
-	}
-
-	_, err := os.Stat(os.Args[1])
-	if err != nil {
-		return "", fmt.Errorf("error reading config file at %s: %v", os.Args[1], err)
-	}
-
-	return os.Args[1], nil
 }
 
 func scrapeDatadogPrices(url string) (*datadogplugin.PricingInformation, error) {

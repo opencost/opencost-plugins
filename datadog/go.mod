@@ -1,6 +1,8 @@
 module github.com/opencost/opencost-plugins/datadog
 
-go 1.21.6
+go 1.22.2
+
+replace github.com/opencost/opencost-plugins/common => ../common
 
 require (
 	github.com/DataDog/datadog-api-client-go/v2 v2.23.0
@@ -36,6 +38,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/oklog/run v1.1.0 // indirect
+	github.com/opencost/opencost-plugins/common v0.0.0-00010101000000-000000000000 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pelletier/go-toml/v2 v2.1.1 // indirect
 	github.com/rs/zerolog v1.32.0 // indirect
