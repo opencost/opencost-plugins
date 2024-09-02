@@ -1,2 +1,3 @@
 build
 *.out
+mongodb-atlas/scripts
