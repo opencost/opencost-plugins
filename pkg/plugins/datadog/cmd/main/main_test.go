@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	datadogplugin "github.com/opencost/opencost-plugins/datadog/datadogplugin"
+	datadogplugin "github.com/opencost/opencost-plugins/pkg/plugins/datadog/datadogplugin"
 	"github.com/opencost/opencost/core/pkg/log"
 	"github.com/opencost/opencost/core/pkg/model/pb"
 	"github.com/opencost/opencost/core/pkg/util/timeutil"

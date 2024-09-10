@@ -59,9 +59,6 @@ Once the configuration is designed, it's time to write the plugin. Within `<repo
 ## Implement tests (highly recommended)
 Write some unit tests to validate the functionality of your new plugin. See the [Datadog unit tests](https://github.com/opencost/opencost-plugins/blob/main/datadog/tests/datadog_test.go) for reference.
 
-## Add your plugin to the manifest
-Add a new line to the [`opencost-plugins` manifest](https://github.com/opencost/opencost-plugins/blob/main/manifest) containing the name of your new plugin. This manifest is used to automatically retrieve the list of available OpenCost plugins.
-
 ## Submit it!
 Now that your plugin is implemented and tested, all that's left is to get it submitted for review. Create a PR based off your branch and submit it, and an OpenCost developer will review it for you.
 
