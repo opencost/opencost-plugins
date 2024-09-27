@@ -32,6 +32,7 @@ var handshakeConfig = plugin.HandshakeConfig{
 }
 
 const costExplorerFmt = "https://cloud.mongodb.com/api/atlas/v2/orgs/%s/billing/costExplorer/usage"
+const costExplorerQueryFmt = "https://cloud.mongodb.com/api/atlas/v2/orgs/%s/billing/costExplorer/usage/%s"
 
 func main() {
 	fmt.Println("Initializing Mongo plugin")
@@ -133,7 +134,7 @@ func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window) (*pb.Cust
 	}
 
 	// get the costs
-	costs, err := getCosts(a.atlasClient, token)
+	costs, err := getCosts(a.atlasClient, a.orgID, token)
 	if err != nil {
 		log.Errorf("error getting costs: %v", err)
 		return nil, err
@@ -153,9 +154,40 @@ func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window) (*pb.Cust
 	return &resp, nil
 }
 
-func getCosts(client HTTPClient, token string) ([]*pb.CustomCost, error) {
+func getCosts(client HTTPClient, org string, token string) ([]*pb.CustomCost, error) {
+	request, _ := http.NewRequest("GET", fmt.Sprintf(costExplorerQueryFmt, org, token)
+
+	request.Header.Set("Accept", "application/vnd.atlas.2023-01-01+json")
+	request.Header.Set("Content-Type", "application/vnd.atlas.2023-01-01+json")
+
+	response, error := client.Do(request)
+	statusCode := response.StatusCode
+	//102 status code means processing - so repeat call 5 times to see if we get a response
+	for count := 1; count < 5 && statusCode == 102; count++ {
+		// Sleep for 5 seconds before the next request
+		time.Sleep(5 * time.Second)
+        response, err := client.Do(request)
+        statusCode := response.StatusCode
+       
+        
+    }
+
+	if error != nil {
+		msg := fmt.Sprintf("getCostExplorerUsage: error from server: %v", error)
+		log.Errorf(msg)
+		return nil, fmt.Errorf(msg)
+
+	}
+	//fake it for now
+	cost := pb.CustomCost{
+		Metadata: "HI",
+		Zone: "US-EAST",
+		AccountName: org,
+		ChargeCategory: "DU"
+	}
+	//TODO convert response to 
 	// TODO - take the token, call the usage API, downlad the usage, parse it into the CustomCost struct
-	return nil, nil
+	return cost, nil
 }
 
 // pass list of orgs , start date, end date
@@ -191,7 +223,7 @@ func createCostExplorerQueryToken(org string, startDate time.Time, endDate time.
 	defer response.Body.Close()
 
 	body, _ := io.ReadAll(response.Body)
-	//fmt.Println("response Body:", string(body))
+	log.Debugf("response Body:", string(body))
 	var createCostExplorerQueryResponse atlasplugin.CreateCostExplorerQueryResponse
 	respUnmarshalError := json.Unmarshal([]byte(body), &createCostExplorerQueryResponse)
 	if respUnmarshalError != nil {
