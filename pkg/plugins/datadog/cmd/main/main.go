@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	_nethttp "net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
-
-	"os"
 
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadogV2"
@@ -101,7 +101,7 @@ func main() {
 	}
 	log.SetLogLevel(ddConfig.DDLogLevel)
 	// datadog usage APIs allow 10 requests every 30 seconds
-	rateLimiter := rate.NewLimiter(0.25, 5)
+	rateLimiter := rate.NewLimiter(0.1, 1)
 	ddCostSrc := DatadogCostSource{
 		rateLimiter: rateLimiter,
 	}
@@ -153,12 +153,29 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 			return &ccResp
 		}
 
-		params.FilterTimestampEnd = window.End()
-		resp, r, err := d.usageApi.GetHourlyUsage(d.ddCtx, *window.Start(), "all", *params)
-		if err != nil {
-			log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
-			log.Errorf("Full HTTP response: %v\n", r)
-			ccResp.Errors = append(ccResp.Errors, err.Error())
+		maxTries := 5
+		try := 1
+		var resp datadogV2.HourlyUsageResponse
+		for try <= maxTries {
+			params.FilterTimestampEnd = window.End()
+			var r *_nethttp.Response
+			resp, r, err = d.usageApi.GetHourlyUsage(d.ddCtx, *window.Start(), "all", *params)
+			if err != nil {
+				log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
+				log.Errorf("Full HTTP response: %v\n", r)
+				ccResp.Errors = append(ccResp.Errors, err.Error())
+			}
+
+			if err == nil {
+				break
+			} else {
+				if strings.Contains(err.Error(), "429") {
+					log.Errorf("rate limit reached, retrying...")
+				}
+				time.Sleep(30 * time.Second)
+				try++
+			}
+
 		}
 
 		for index := range resp.Data {
