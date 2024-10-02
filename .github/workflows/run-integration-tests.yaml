@@ -24,6 +24,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
+      - name: prep workspace
+        run: |
+            just init-workspace
       - name: run integration tests
         run: |
           just integration-test-all-plugins
