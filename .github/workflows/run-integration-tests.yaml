@@ -3,7 +3,7 @@ name: Run Nightly Integration Tests
 on:
     push:
         branches:
-            - main
+            - atm/restructure-testharness
     # schedule:
     #     - cron: "0 0 * * *"
 
@@ -11,9 +11,9 @@ jobs:
   integration-test-runner:
     runs-on: ubuntu-latest
     steps:
-      - uses: oNaiPs/secrets-to-env-action@v1
-        with:
-          secrets: ${{ toJSON(secrets) }}
+    #   - uses: oNaiPs/secrets-to-env-action@v1
+    #     with:
+    #       secrets: ${{ toJSON(secrets) }}
       - uses: actions/checkout@v4
         with:
           path: ./

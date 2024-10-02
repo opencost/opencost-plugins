@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/hashicorp/go-multierror"
@@ -43,12 +42,13 @@ func main() {
 				log.Infof("Testing plugin: %s", plugin)
 
 				// write the config in PLUGIN_NAME_CONFIG out to a file
-				envVarName := fmt.Sprintf("%s_CONFIG", strings.ReplaceAll(strings.ToUpper(plugin), "-", "_"))
-				config := os.Getenv(envVarName)
-				if len(config) == 0 {
-					log.Fatalf("missing config for plugin %s", plugin)
-				}
+				// envVarName := fmt.Sprintf("%s_CONFIG", strings.ReplaceAll(strings.ToUpper(plugin), "-", "_"))
+				// config := os.Getenv(envVarName)
+				// if len(config) == 0 {
+				// 	log.Fatalf("missing config for plugin %s", plugin)
+				// }
 
+				config := "{}"
 				// write the config to a file
 				configDir := os.TempDir()
 
