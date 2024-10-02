@@ -16,7 +16,7 @@ build-all-plugins: clean test-all-plugins
 
 init-workspace:
     go work init
-    find . -type f -iname "go.mod" -print0 | {{commonenv}} VERSION={{version}} COMMIT={{commit}} xargs -0 -I{} go work use {}
+    find . -type f -iname "go.mod" -print0 | xargs -0 dirname | xargs -0 -I{} go work use {}
 
 integration-test-all-plugins:
     echo "pluginPaths: {{pluginPaths}}"
