@@ -1,0 +1,28 @@
+name: Run Nightly Integration Tests
+
+on:
+    push:
+        branches:
+            - main
+    # schedule:
+    #     - cron: "0 0 * * *"
+
+jobs:
+  integration-test-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ./
+          ref: main
+      - name: Install just
+        uses: extractions/setup-just@v2
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+      - name: run integration tests
+        run: |
+          just integration-test-all-plugins
+
+

@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	_nethttp "net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
-
-	"os"
 
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadogV2"
@@ -19,7 +19,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/hashicorp/go-plugin"
-	datadogplugin "github.com/opencost/opencost-plugins/datadog/datadogplugin"
+	commonconfig "github.com/opencost/opencost-plugins/pkg/common/config"
+	datadogplugin "github.com/opencost/opencost-plugins/pkg/plugins/datadog/datadogplugin"
 	"github.com/opencost/opencost/core/pkg/log"
 	"github.com/opencost/opencost/core/pkg/model/pb"
 	"github.com/opencost/opencost/core/pkg/opencost"
@@ -89,7 +90,7 @@ func (d *DatadogCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Cust
 
 func main() {
 
-	configFile, err := getConfigFilePath()
+	configFile, err := commonconfig.GetConfigFilePath()
 	if err != nil {
 		log.Fatalf("error opening config file: %v", err)
 	}
@@ -100,7 +101,7 @@ func main() {
 	}
 	log.SetLogLevel(ddConfig.DDLogLevel)
 	// datadog usage APIs allow 10 requests every 30 seconds
-	rateLimiter := rate.NewLimiter(0.25, 5)
+	rateLimiter := rate.NewLimiter(0.1, 1)
 	ddCostSrc := DatadogCostSource{
 		rateLimiter: rateLimiter,
 	}
@@ -152,12 +153,29 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 			return &ccResp
 		}
 
-		params.FilterTimestampEnd = window.End()
-		resp, r, err := d.usageApi.GetHourlyUsage(d.ddCtx, *window.Start(), "all", *params)
-		if err != nil {
-			log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
-			log.Errorf("Full HTTP response: %v\n", r)
-			ccResp.Errors = append(ccResp.Errors, err.Error())
+		maxTries := 5
+		try := 1
+		var resp datadogV2.HourlyUsageResponse
+		for try <= maxTries {
+			params.FilterTimestampEnd = window.End()
+			var r *_nethttp.Response
+			resp, r, err = d.usageApi.GetHourlyUsage(d.ddCtx, *window.Start(), "all", *params)
+			if err != nil {
+				log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
+				log.Errorf("Full HTTP response: %v\n", r)
+				ccResp.Errors = append(ccResp.Errors, err.Error())
+			}
+
+			if err == nil {
+				break
+			} else {
+				if strings.Contains(err.Error(), "429") {
+					log.Errorf("rate limit reached, retrying...")
+				}
+				time.Sleep(30 * time.Second)
+				try++
+			}
+
 		}
 
 		for index := range resp.Data {
@@ -585,22 +603,6 @@ func getDatadogConfig(configFilePath string) (*datadogplugin.DatadogConfig, erro
 	}
 
 	return &result, nil
-}
-
-func getConfigFilePath() (string, error) {
-	// plugins expect exactly 2 args: the executable itself,
-	// and a path to the config file to use
-	// all config for the plugin must come through the config file
-	if len(os.Args) != 2 {
-		return "", fmt.Errorf("plugins require 2 args: the plugin itself, and the full path to its config file. Got %d args", len(os.Args))
-	}
-
-	_, err := os.Stat(os.Args[1])
-	if err != nil {
-		return "", fmt.Errorf("error reading config file at %s: %v", os.Args[1], err)
-	}
-
-	return os.Args[1], nil
 }
 
 func scrapeDatadogPrices(url string) (*datadogplugin.PricingInformation, error) {

@@ -26,26 +26,26 @@ fi
 echo $(pwd)
 plugin_name=$(basename $(dirname $gomod))
 echo "plugin name: $plugin_name"
-cd $plugin_name
-GOOS=linux GOARCH=arm64 go build -x -o "../build/$plugin_name.ocplugin.linux.arm64" \
+cd pkg/plugins/$plugin_name
+GOOS=linux GOARCH=arm64 go build -o "../../../build/$plugin_name.ocplugin.linux.arm64" \
         -ldflags \
           "-X github.com/opencost/opencost/pkg/version.Version=$VERSION \
            -X github.com/opencost/opencost/pkg/version.GitCommit=$COMMIT" \
         ./cmd/main 
 
-GOOS=linux GOARCH=amd64 go build -x -o "../build/$plugin_name.ocplugin.linux.amd64" \
+GOOS=linux GOARCH=amd64 go build -o "../../../build/$plugin_name.ocplugin.linux.amd64" \
         -ldflags \
           "-X github.com/opencost/opencost/pkg/version.Version=$VERSION \
            -X github.com/opencost/opencost/pkg/version.GitCommit=$COMMIT" \
         ./cmd/main
 
-GOOS=darwin GOARCH=arm64 go build -x -o "../build/$plugin_name.ocplugin.darwin.arm64" \
+GOOS=darwin GOARCH=arm64 go build -o "../../../build/$plugin_name.ocplugin.darwin.arm64" \
         -ldflags \
           "-X github.com/opencost/opencost/pkg/version.Version=$VERSION \
            -X github.com/opencost/opencost/pkg/version.GitCommit=$COMMIT" \
         ./cmd/main 
 
-GOOS=darwin GOARCH=amd64 go build -x -o "../build/$plugin_name.ocplugin.darwin.amd64" \
+GOOS=darwin GOARCH=amd64 go build -o "../../../build/$plugin_name.ocplugin.darwin.amd64" \
         -ldflags \
           "-X github.com/opencost/opencost/pkg/version.Version=$VERSION \
            -X github.com/opencost/opencost/pkg/version.GitCommit=$COMMIT" \
