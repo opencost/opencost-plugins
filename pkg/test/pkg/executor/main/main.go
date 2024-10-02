@@ -68,7 +68,7 @@ func main() {
 				windowEnd := time.Now().Add(24 * time.Hour).Truncate(24 * time.Hour)
 				// invoke plugin via harness
 
-				pluginPath := cwd + "/opencost-plugins/pkg/plugins/" + plugin
+				pluginPath := cwd + "/pkg/plugins/" + plugin
 				respDaily := getResponse(pluginPath, file.Name(), windowStart, windowEnd, 24*time.Hour)
 
 				// request usage for 2 days ago in hourly increments
