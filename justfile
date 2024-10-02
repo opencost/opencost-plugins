@@ -16,7 +16,7 @@ build-all-plugins: clean test-all-plugins
 
 integration-test-all-plugins:
     echo "pluginPaths: {{pluginPaths}}"
-    cd ./pkg/test/pkg/executor/main && {{commonenv}} go run . --plugins={{pluginPaths}}
+    {{commonenv}} go run pkg/test/pkg/executor/main/main.go --plugins={{pluginPaths}}
 
 clean:
     rm -rf ./build
