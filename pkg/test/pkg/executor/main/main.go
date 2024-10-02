@@ -27,7 +27,7 @@ func main() {
 		Long:  `This program will invoke each plugin in turn, and will confirm no errors, and that the returned costs are non-zero.`,
 		Run: func(cmd *cobra.Command, args []string) {
 			log.Info("running opencost plugin integration test harness")
-			log.Info("this program will invoke each plugin in turn, and will confirm no errors, and that the returned costs are non-zero.")
+			log.Info("this program will invoke each plugin in turn, and then will call a validator to confirm the results.")
 			log.Info("it is up to plugin implementors to ensure that their plugins edge cases are covered by unit tests.")
 			log.Info("this harness requires the JSON config for each plugin to be present in secret env vars")
 
