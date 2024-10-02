@@ -16,7 +16,7 @@ build-all-plugins: clean test-all-plugins
 
 integration-test-all-plugins:
     pluginPaths=$({{commonenv}} find ./pkg/plugins -type f -iname "go.mod" -print0 | xargs -0 dirname | xargs basename | tr ' ' ',')
-    cd ./test/pkg/executor/main && {{commonenv}} go run . --plugins=$pluginPaths
+    cd ./pkg/test/pkg/executor/main && {{commonenv}} go run . --plugins=$pluginPaths
 
 clean:
     rm -rf ./build
