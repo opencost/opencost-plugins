@@ -22,9 +22,6 @@ integration-test-all-plugins:
     echo "pluginPaths: {{pluginPaths}}"
     {{commonenv}} go run pkg/test/pkg/executor/main/main.go --plugins={{pluginPaths}}
 
-integration-test-plugin pluginName:
-    {{commonenv}} go run pkg/test/pkg/executor/main/main.go --plugins={{pluginName}}
-
 clean:
     rm -rf ./build
 
