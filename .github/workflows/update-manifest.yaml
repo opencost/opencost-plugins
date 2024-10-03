@@ -26,14 +26,28 @@ jobs:
                echo "manifest contents:"
                cat manifest
 
-        - uses: EndBug/add-and-commit@v9
-          name: commit updated manifest file
+        # - uses: EndBug/add-and-commit@v9
+        #   name: commit updated manifest file
+        #   with:
+        #     add: 'manifest'    
+        #     commit: --signoff
+        #     message: 'update manifest'
+        #     author_name: 'cliffcolvin'
+        #     github_token: 
+        - name: Commit changes
+          run: |
+              git config --local user.email "ccolvin@kubecost.com"
+              git config --local user.name "cliffcolvin"
+              git add manifest
+              git commit -m "update manifest"
+    
+        - name: Push chart to repo
+          uses: ad-m/github-push-action@master
           with:
-            add: 'manifest'    
-            commit: --signoff
-            message: 'update manifest'
-            author_name: 'opencost-plugin-bot'
-            github_token: ${{ secrets.GH_PAT }}
+              github_token: ${{ secrets.GH_PAT }}
+              directory: .
+              repository: opencost/opencost-plugins
+              branch: main
 
 
                
