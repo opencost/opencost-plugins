@@ -1,11 +1,11 @@
-name: Run Nightly Integration Tests
+name: Run Integration Tests
 
 on:
     push:
         branches:
             - main
-    # schedule:
-    #     - cron: "0 5 * * *"
+    schedule:
+        - cron: "0 5 * * *"
 
 jobs:
   integration-test-runner:
