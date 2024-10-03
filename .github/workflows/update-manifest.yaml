@@ -31,10 +31,10 @@ jobs:
           run: |
               git config --local user.email "github-actions[bot]@noreply.example.com"
               git config --local user.name "github-actions[bot]"
-              git add manifest
-              git commit -m "update manifest"
+              git add manifest || true
+              git commit -m "update manifest" || true
     
-        - name: Push chart to repo
+        - name: update manifest
           uses: ad-m/github-push-action@master
           with:
               ssh: true
