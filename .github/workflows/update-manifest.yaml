@@ -20,22 +20,13 @@ jobs:
           run: | 
                plugins=$(ls pkg/plugins | tr -s ' ' | sort)
                echo "got plugins: $plugins"
-               echo '
-               # this manifest contains the name of every currently implemented plugin. it can be pulled via https://github.com/opencost/opencost-plugins/raw/main/manifest to get an up to date list of current plugins.
+               echo '# this manifest contains the name of every currently implemented plugin. it can be pulled via https://github.com/opencost/opencost-plugins/raw/main/manifest to get an up to date list of current plugins.
                ' > manifest
                echo "$plugins" >> manifest
                echo "manifest updated"
                echo "manifest contents:"
                cat manifest
 
-        # - uses: EndBug/add-and-commit@v9
-        #   name: commit updated manifest file
-        #   with:
-        #     add: 'manifest'    
-        #     commit: --signoff
-        #     message: 'update manifest'
-        #     author_name: 'cliffcolvin'
-        #     github_token: 
         - name: Commit changes
           run: |
               git config --local user.email "github-actions[bot]@noreply.example.com"
