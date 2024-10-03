@@ -163,7 +163,6 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 			if err != nil {
 				log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
 				log.Errorf("Full HTTP response: %v\n", r)
-				ccResp.Errors = append(ccResp.Errors, err.Error())
 			}
 
 			if err == nil {
@@ -176,6 +175,11 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 				try++
 			}
 
+		}
+
+		if err != nil {
+			log.Errorf("after calling `UsageMeteringApi.GetHourlyUsage` %d times, still getting error: %v\n", maxTries, err)
+			ccResp.Errors = append(ccResp.Errors, err.Error())
 		}
 
 		for index := range resp.Data {

@@ -9,6 +9,8 @@ jobs:
   update-manifest:
     runs-on: ubuntu-latest
     steps:
+        - name: echo actor
+          run: echo "actor is ${{ github.actor }}"
         - uses: actions/checkout@v4
           with:
             path: ./
@@ -31,6 +33,7 @@ jobs:
             commit: --signoff
             message: 'update manifest'
             author_name: 'opencost-plugin-bot'
+            github_token: ${{ secrets.GH_PAT }}
 
 
                
