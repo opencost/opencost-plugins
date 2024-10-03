@@ -610,34 +610,58 @@ func getDatadogConfig(configFilePath string) (*datadogplugin.DatadogConfig, erro
 }
 
 func scrapeDatadogPrices(url string) (*datadogplugin.PricingInformation, error) {
-	// Send a GET request to the URL
-	response, err := http.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch the page: %v", err)
-	}
-	defer response.Body.Close()
+	maxTries := 5
+	var result *datadogplugin.PricingInformation
+	var errTry error
+	for try := 1; try <= maxTries; try++ {
+		var response *http.Response
+		// Send a GET request to the URL
+		response, errTry = http.Get(url)
+		if errTry != nil || response.StatusCode != http.StatusOK {
+			log.Errorf("failed to fetch the page: %v", errTry)
+			time.Sleep(30 * time.Second)
+			response.Body.Close()
+			continue
+		}
 
-	// Check if the request was successful
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to retrieve pricing page. Status code: %d", response.StatusCode)
-	}
-	b, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read pricing page body: %v", err)
-	}
-	res := datadogplugin.DatadogProJSON{}
-	r := regexp.MustCompile(`var productDetailData = \s*(.*?)\s*;`)
-	log.Tracef("got response: %s", string(b))
-	matches := r.FindAllStringSubmatch(string(b), -1)
-	if len(matches) != 1 {
-		return nil, fmt.Errorf("requires exactly 1 product detail data, got %d", len(matches))
+		b, err := io.ReadAll(response.Body)
+		if err != nil {
+			errTry = err
+			response.Body.Close()
+			log.Errorf("failed to read pricing page body: %v", err)
+			time.Sleep(30 * time.Second)
+			continue
+		}
+		response.Body.Close()
+		res := datadogplugin.DatadogProJSON{}
+		r := regexp.MustCompile(`var productDetailData = \s*(.*?)\s*;`)
+		log.Tracef("got response: %s", string(b))
+		matches := r.FindAllStringSubmatch(string(b), -1)
+		if len(matches) != 1 {
+			errTry = err
+			log.Errorf("requires exactly 1 product detail data, got %d", len(matches))
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		log.Tracef("matches[0][1]:" + matches[0][1])
+		err = json.Unmarshal([]byte(matches[0][1]), &res)
+		if err != nil {
+			errTry = err
+			log.Errorf("failed to read pricing page body: %v", err)
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		if errTry == nil {
+			result = &res.OfferData.PricingInformation
+			break
+		}
+
 	}
 
-	log.Tracef("matches[0][1]:" + matches[0][1])
-	err = json.Unmarshal([]byte(matches[0][1]), &res)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read pricing page body: %v", err)
+	if errTry != nil {
+		return nil, fmt.Errorf("failed to fetch the page after %d tries: %w", maxTries, errTry)
 	}
-
-	return &res.OfferData.PricingInformation, nil
+	return result, nil
 }
