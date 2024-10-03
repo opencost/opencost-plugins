@@ -32,3 +32,35 @@ jobs:
           just integration-test-all-plugins
 
 
+  notify-fail:
+    needs: [integration-test-runner]
+    runs-on: depot-ubuntu-22.04
+    if: failure()
+    steps:
+      - name: Slack notify
+        id: slack
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "workflow": "${{github.workflow}}",
+              "message": "Plugin Integration tests have failed! Please check the logs for more information."
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+  notify-success:
+            needs: [integration-test-runner]
+            runs-on: depot-ubuntu-22.04
+            if: success()
+            steps:
+              - name: Slack notify
+                id: slack
+                uses: slackapi/slack-github-action@v1
+                with:
+                  payload: |
+                            {
+                              "workflow": "${{github.workflow}}",
+                              "message": "Plugin Integration tests have passed! :tada:"
+                            }
+                env:
+                  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
