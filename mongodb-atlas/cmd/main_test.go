@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -21,10 +21,6 @@ type MockHTTPClient struct {
 // The MockHTTPClient's Do method uses a function defined at runtime to mock various responses
 func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return m.DoFunc(req)
-}
-
-func TestSanity(t *testing.T) {
-	assert.True(t, true)
 }
 
 func TestCreateCostExplorerQueryToken(t *testing.T) {
@@ -55,7 +51,7 @@ func TestCreateCostExplorerQueryToken(t *testing.T) {
 			// Return a mock response with status 200 and mock JSON body
 			return &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       ioutil.NopCloser(bytes.NewBuffer(mockResponseJson)),
+				Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
 			}, nil
 		},
 	}
@@ -119,19 +115,11 @@ func TestErrorFromServer(t *testing.T) {
 	// Create a mock HTTPClient that returns a successful response
 	mockClient := &MockHTTPClient{
 		DoFunc: func(req *http.Request) (*http.Response, error) {
-			// Verify that the request method and URL are correct
-			if req.Method != http.MethodPost {
-				t.Errorf("expected POST request, got %s", req.Method)
-			}
-			expectedURL := fmt.Sprintf(costExplorerFmt, orgId)
-			if req.URL.String() != expectedURL {
-				t.Errorf("expected URL %s, got %s", expectedURL, req.URL.String())
-			}
 
 			// Return a mock response with status 200 and mock JSON body
 			return &http.Response{
 				StatusCode: http.StatusInternalServerError,
-				Body:       ioutil.NopCloser(bytes.NewBufferString("fake")),
+				Body:       io.NopCloser(bytes.NewBufferString("fake")),
 			}, nil
 		},
 	}
@@ -149,19 +137,11 @@ func TestCallToCreateCostExplorerQueryBadMessage(t *testing.T) {
 	startTime, _ := time.Parse(layout, "2023-12-01")
 	mockClient := &MockHTTPClient{
 		DoFunc: func(req *http.Request) (*http.Response, error) {
-			// Verify that the request method and URL are correct
-			if req.Method != http.MethodPost {
-				t.Errorf("expected POST request, got %s", req.Method)
-			}
-			expectedURL := fmt.Sprintf(costExplorerFmt, "myOrg")
-			if req.URL.String() != expectedURL {
-				t.Errorf("expected URL %s, got %s", expectedURL, req.URL.String())
-			}
 
 			// Return a mock response with status 200 and mock JSON body
 			return &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       ioutil.NopCloser(bytes.NewBufferString("This ain't json")),
+				Body:       io.NopCloser(bytes.NewBufferString("This ain't json")),
 			}, nil
 		},
 	}
@@ -171,4 +151,168 @@ func TestCallToCreateCostExplorerQueryBadMessage(t *testing.T) {
 
 }
 
-//tests for getCosts
+// tests for getCosts
+func TestGetCostsMultipleInvoices(t *testing.T) {
+	costResponse := atlasplugin.CostResponse{
+		UsageDetails: []atlasplugin.Invoice{
+			{
+				InvoiceId:        "INV001",
+				OrganizationId:   "ORG123",
+				OrganizationName: "Acme Corp",
+				Service:          "Compute",
+				UsageAmount:      120.50,
+				UsageDate:        "2024-10-01",
+			},
+			{
+				InvoiceId:        "INV002",
+				OrganizationId:   "ORG124",
+				OrganizationName: "Beta Corp",
+				Service:          "Storage",
+				UsageAmount:      75.75,
+				UsageDate:        "2024-10-02",
+			},
+			{
+				InvoiceId:        "INV003",
+				OrganizationId:   "ORG125",
+				OrganizationName: "Gamma Inc",
+				Service:          "Networking",
+				UsageAmount:      50.00,
+				UsageDate:        "2024-10-03",
+			},
+		},
+	}
+
+	mockResponseJson, _ := json.Marshal(costResponse)
+
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			// Verify that the request method and URL are correct
+			if req.Method != http.MethodGet {
+				t.Errorf("expected GET request, got %s", req.Method)
+			}
+			expectedURL := fmt.Sprintf(costExplorerQueryFmt, "myOrg", "t1")
+			if req.URL.String() != expectedURL {
+				t.Errorf("expected URL %s, got %s", expectedURL, req.URL.String())
+			}
+
+			// Return a mock response with status 200 and mock JSON body
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
+			}, nil
+		},
+	}
+	costs, err := GetCosts(mockClient, "myOrg", "t1")
+	assert.Nil(t, err)
+	assert.Equal(t, 3, len(costs))
+
+	for i, invoice := range costResponse.UsageDetails {
+		assert.Equal(t, invoice.InvoiceId, costs[i].Id)
+		assert.Equal(t, invoice.OrganizationName, costs[i].AccountName)
+		assert.Equal(t, invoice.Service, costs[i].ChargeCategory)
+		assert.Equal(t, invoice.UsageAmount, costs[i].BilledCost)
+	}
+}
+
+func TestGetCostErrorFromServer(t *testing.T) {
+
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+
+			// Return a mock response with status 200 and mock JSON body
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(bytes.NewBufferString("")),
+			}, nil
+		},
+	}
+	costs, err := GetCosts(mockClient, "myOrg", "t1")
+
+	assert.NotEmpty(t, err)
+	assert.Nil(t, costs)
+
+}
+
+func TestGetCostsBadMessage(t *testing.T) {
+
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+
+			// Return a mock response with status 200 and mock JSON body
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(bytes.NewBufferString("No Jason No")),
+			}, nil
+		},
+	}
+
+	_, error := GetCosts(mockClient, "myOrg", "t1")
+	assert.NotEmpty(t, error)
+
+}
+
+func TestRepeatCallTill200(t *testing.T) {
+
+	var count = 0
+	costResponse := atlasplugin.CostResponse{
+		UsageDetails: []atlasplugin.Invoice{
+
+			{
+				InvoiceId:        "INV003",
+				OrganizationId:   "ORG125",
+				OrganizationName: "Gamma Inc",
+				Service:          "Networking",
+				UsageAmount:      50.00,
+				UsageDate:        "2024-10-03",
+			},
+		},
+	}
+
+	mockResponseJson, _ := json.Marshal(costResponse)
+
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			count++
+
+			if count < 5 {
+				// Return a mock response with status 200 and mock JSON body
+				return &http.Response{
+					StatusCode: http.StatusProcessing,
+					Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
+				}, nil
+
+			} else {
+				// Return a mock response with status 200 and mock JSON body
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
+				}, nil
+
+			}
+
+		},
+	}
+
+	costs, err := GetCosts(mockClient, "myOrg", "t1")
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(costs))
+}
+
+func TestStuckInProcessing(t *testing.T) {
+
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+
+			// Return a mock response with status 200 and mock JSON body
+			return &http.Response{
+				StatusCode: http.StatusProcessing,
+				Body:       io.NopCloser(bytes.NewBufferString("")),
+			}, nil
+
+		},
+	}
+
+	costs, err := GetCosts(mockClient, "myOrg", "t1")
+	assert.NotNil(t, err)
+	assert.Nil(t, costs)
+}

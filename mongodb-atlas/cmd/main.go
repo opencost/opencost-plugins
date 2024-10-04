@@ -134,7 +134,7 @@ func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window) (*pb.Cust
 	}
 
 	// get the costs
-	costs, err := getCosts(a.atlasClient, a.orgID, token)
+	costs, err := GetCosts(a.atlasClient, a.orgID, token)
 	if err != nil {
 		log.Errorf("error getting costs: %v", err)
 		return nil, err
@@ -154,7 +154,7 @@ func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window) (*pb.Cust
 	return &resp, nil
 }
 
-func getCosts(client HTTPClient, org string, token string) ([]*pb.CustomCost, error) {
+func GetCosts(client HTTPClient, org string, token string) ([]*pb.CustomCost, error) {
 	request, _ := http.NewRequest("GET", fmt.Sprintf(costExplorerQueryFmt, org, token), nil)
 
 	request.Header.Set("Accept", "application/vnd.atlas.2023-01-01+json")
@@ -163,7 +163,7 @@ func getCosts(client HTTPClient, org string, token string) ([]*pb.CustomCost, er
 	response, error := client.Do(request)
 	statusCode := response.StatusCode
 	//102 status code means processing - so repeat call 5 times to see if we get a response
-	for count := 1; count < 5 && statusCode == 102; count++ {
+	for count := 1; count < 5 && statusCode == http.StatusProcessing; count++ {
 		// Sleep for 5 seconds before the next request
 		time.Sleep(5 * time.Second)
 		response, _ := client.Do(request)
@@ -171,6 +171,10 @@ func getCosts(client HTTPClient, org string, token string) ([]*pb.CustomCost, er
 
 	}
 
+	if statusCode == http.StatusProcessing {
+		msg := "timeout waiting for response"
+		return nil, fmt.Errorf(msg)
+	}
 	if error != nil {
 		msg := fmt.Sprintf("getCostExplorerUsage: error from server: %v", error)
 		log.Errorf(msg)
@@ -187,11 +191,6 @@ func getCosts(client HTTPClient, org string, token string) ([]*pb.CustomCost, er
 		log.Errorf(msg)
 		return nil, fmt.Errorf(msg)
 	}
-	//sample
-	//report_data='{"usageDetails":[{"invoiceId":"66d7254246a21a41036ff315","organizationId":"66d7254246a21a41036ff2e9","organizationName":"Kubecost","service":"Data Transfer","usageAmount":1.33,"usageDate":"2024-09-01"},
-	//{"invoiceId":"66d7254246a21a41036ff315","organizationId":"66d7254246a21a41036ff2e9","organizationName":"Kubecost","service":"Clusters","usageAmount":51.19,"usageDate":"2024-09-01"}]}’
-
-	//fake it for now
 	var costs []*pb.CustomCost
 	// Iterate over the UsageDetails in CostResponse
 	for _, invoice := range costResponse.UsageDetails {
