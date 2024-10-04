@@ -1,0 +1,2 @@
+#Commit Message template
+Signed-off-by: Sajit Kunnumkal  <sajit@kunnumkal.com> 

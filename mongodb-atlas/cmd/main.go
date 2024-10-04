@@ -127,7 +127,7 @@ func (a *AtlasCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Custom
 func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window) (*pb.CustomCostResponse, error) {
 
 	// get the token
-	token, err := createCostExplorerQueryToken(a.orgID, *win.Start(), *win.End(), a.atlasClient)
+	token, err := CreateCostExplorerQueryToken(a.orgID, *win.Start(), *win.End(), a.atlasClient)
 	if err != nil {
 		log.Errorf("error getting token: %v", err)
 		return nil, err
@@ -155,7 +155,7 @@ func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window) (*pb.Cust
 }
 
 func getCosts(client HTTPClient, org string, token string) ([]*pb.CustomCost, error) {
-	request, _ := http.NewRequest("GET", fmt.Sprintf(costExplorerQueryFmt, org, token)
+	request, _ := http.NewRequest("GET", fmt.Sprintf(costExplorerQueryFmt, org, token), nil)
 
 	request.Header.Set("Accept", "application/vnd.atlas.2023-01-01+json")
 	request.Header.Set("Content-Type", "application/vnd.atlas.2023-01-01+json")
@@ -166,11 +166,10 @@ func getCosts(client HTTPClient, org string, token string) ([]*pb.CustomCost, er
 	for count := 1; count < 5 && statusCode == 102; count++ {
 		// Sleep for 5 seconds before the next request
 		time.Sleep(5 * time.Second)
-        response, err := client.Do(request)
-        statusCode := response.StatusCode
-       
-        
-    }
+		response, _ := client.Do(request)
+		statusCode = response.StatusCode
+
+	}
 
 	if error != nil {
 		msg := fmt.Sprintf("getCostExplorerUsage: error from server: %v", error)
@@ -178,20 +177,40 @@ func getCosts(client HTTPClient, org string, token string) ([]*pb.CustomCost, er
 		return nil, fmt.Errorf(msg)
 
 	}
-	//fake it for now
-	cost := pb.CustomCost{
-		Metadata: "HI",
-		Zone: "US-EAST",
-		AccountName: org,
-		ChargeCategory: "DU"
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	log.Debugf("response Body: %s", string(body))
+	var costResponse atlasplugin.CostResponse
+	respUnmarshalError := json.Unmarshal([]byte(body), &costResponse)
+	if respUnmarshalError != nil {
+		msg := fmt.Sprintf("getCost: error unmarshalling response: %v", respUnmarshalError)
+		log.Errorf(msg)
+		return nil, fmt.Errorf(msg)
 	}
-	//TODO convert response to 
-	// TODO - take the token, call the usage API, downlad the usage, parse it into the CustomCost struct
-	return cost, nil
+	//sample
+	//report_data='{"usageDetails":[{"invoiceId":"66d7254246a21a41036ff315","organizationId":"66d7254246a21a41036ff2e9","organizationName":"Kubecost","service":"Data Transfer","usageAmount":1.33,"usageDate":"2024-09-01"},
+	//{"invoiceId":"66d7254246a21a41036ff315","organizationId":"66d7254246a21a41036ff2e9","organizationName":"Kubecost","service":"Clusters","usageAmount":51.19,"usageDate":"2024-09-01"}]}’
+
+	//fake it for now
+	var costs []*pb.CustomCost
+	// Iterate over the UsageDetails in CostResponse
+	for _, invoice := range costResponse.UsageDetails {
+		// Create a new pb.CustomCost for each Invoice
+		customCost := &pb.CustomCost{
+			Id:             invoice.InvoiceId,
+			AccountName:    invoice.OrganizationName,
+			ChargeCategory: invoice.Service,
+			BilledCost:     invoice.UsageAmount,
+		}
+
+		// Append the customCost pointer to the slice
+		costs = append(costs, customCost)
+	}
+	return costs, nil
 }
 
 // pass list of orgs , start date, end date
-func createCostExplorerQueryToken(org string, startDate time.Time, endDate time.Time,
+func CreateCostExplorerQueryToken(org string, startDate time.Time, endDate time.Time,
 	client HTTPClient) (string, error) {
 	// Define the layout for the desired format
 	layout := "2006-01-02"
@@ -223,7 +242,7 @@ func createCostExplorerQueryToken(org string, startDate time.Time, endDate time.
 	defer response.Body.Close()
 
 	body, _ := io.ReadAll(response.Body)
-	log.Debugf("response Body:", string(body))
+	log.Debugf("response Body: %s", string(body))
 	var createCostExplorerQueryResponse atlasplugin.CreateCostExplorerQueryResponse
 	respUnmarshalError := json.Unmarshal([]byte(body), &createCostExplorerQueryResponse)
 	if respUnmarshalError != nil {
