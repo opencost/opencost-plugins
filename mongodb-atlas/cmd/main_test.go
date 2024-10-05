@@ -10,6 +10,11 @@ import (
 	"time"
 
 	atlasplugin "github.com/opencost/opencost-plugins/mongodb-atlas/plugin"
+	"github.com/opencost/opencost/core/pkg/model/pb"
+	"github.com/opencost/opencost/core/pkg/opencost"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -254,27 +259,13 @@ func TestGetCostsBadMessage(t *testing.T) {
 func TestRepeatCallTill200(t *testing.T) {
 
 	var count = 0
-	costResponse := atlasplugin.CostResponse{
-		UsageDetails: []atlasplugin.Invoice{
-
-			{
-				InvoiceId:        "INV003",
-				OrganizationId:   "ORG125",
-				OrganizationName: "Gamma Inc",
-				Service:          "Networking",
-				UsageAmount:      50.00,
-				UsageDate:        "2024-10-03",
-			},
-		},
-	}
-
-	mockResponseJson, _ := json.Marshal(costResponse)
+	mockResponseJson := getCostResponseMock()
 
 	mockClient := &MockHTTPClient{
 		DoFunc: func(req *http.Request) (*http.Response, error) {
 			count++
 
-			if count < 5 {
+			if count < 2 {
 				// Return a mock response with status 200 and mock JSON body
 				return &http.Response{
 					StatusCode: http.StatusProcessing,
@@ -298,6 +289,25 @@ func TestRepeatCallTill200(t *testing.T) {
 	assert.Equal(t, 1, len(costs))
 }
 
+func getCostResponseMock() []byte {
+	costResponse := atlasplugin.CostResponse{
+		UsageDetails: []atlasplugin.Invoice{
+
+			{
+				InvoiceId:        "INV003",
+				OrganizationId:   "ORG125",
+				OrganizationName: "Gamma Inc",
+				Service:          "Networking",
+				UsageAmount:      50.00,
+				UsageDate:        "2024-10-03",
+			},
+		},
+	}
+
+	mockResponseJson, _ := json.Marshal(costResponse)
+	return mockResponseJson
+}
+
 func TestStuckInProcessing(t *testing.T) {
 
 	mockClient := &MockHTTPClient{
@@ -315,4 +325,94 @@ func TestStuckInProcessing(t *testing.T) {
 	costs, err := GetCosts(mockClient, "myOrg", "t1")
 	assert.NotNil(t, err)
 	assert.Nil(t, costs)
+}
+
+func TestGetAtlasCostsForWindow(t *testing.T) {
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+
+			costResponse := getCostResponseMock()
+			if req.Method == http.MethodGet {
+				//return costs
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewBuffer(costResponse)),
+				}, nil
+			} else {
+				// Define the response that the mock client will return
+				mockResponse := atlasplugin.CreateCostExplorerQueryResponse{
+					Token: "fake",
+				}
+				mockResponseJson, _ := json.Marshal(mockResponse)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
+				}, nil
+			}
+
+		},
+	}
+	atlasCostSource := AtlasCostSource{
+		orgID:       "myOrg",
+		atlasClient: mockClient,
+	}
+	// Define the start and end time for the window
+	startTime := time.Now().Add(-24 * time.Hour) // 24 hours ago
+	endTime := time.Now()                        // Now
+
+	// Create a new Window instance
+	window := opencost.NewWindow(&startTime, &endTime)
+	resp, error := atlasCostSource.getAtlasCostsForWindow(&window)
+	assert.Nil(t, error)
+	assert.True(t, resp != nil)
+	assert.Equal(t, "data_storage", resp.CostSource)
+	assert.Equal(t, "mongodb-atlas", resp.Domain)
+	assert.Equal(t, "v1", resp.Version)
+	assert.Equal(t, "USD", resp.Currency)
+	assert.Equal(t, 1, len(resp.Costs))
+}
+
+func TestGetCosts(t *testing.T) {
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+
+			costResponse := getCostResponseMock()
+			if req.Method == http.MethodGet {
+				//return costs
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewBuffer(costResponse)),
+				}, nil
+			} else {
+				// Define the response that the mock client will return
+				mockResponse := atlasplugin.CreateCostExplorerQueryResponse{
+					Token: "fake",
+				}
+				mockResponseJson, _ := json.Marshal(mockResponse)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
+				}, nil
+			}
+
+		},
+	}
+	atlasCostSource := AtlasCostSource{
+		orgID:       "myOrg",
+		atlasClient: mockClient,
+	}
+	// Define the start and end time for the window
+	startTime := time.Now().Add(-24 * time.Hour) // 24 hours ago
+	endTime := time.Now()
+
+	customCostRequest := pb.CustomCostRequest{
+		Start:      timestamppb.New(startTime),
+		End:        timestamppb.New(endTime),
+		Resolution: durationpb.New(time.Hour), // Example resolution: 1 hour
+	} // Now
+
+	resp := atlasCostSource.GetCustomCosts(&customCostRequest)
+
+	assert.Equal(t, 1, len(resp))
+
 }

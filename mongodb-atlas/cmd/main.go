@@ -162,8 +162,8 @@ func GetCosts(client HTTPClient, org string, token string) ([]*pb.CustomCost, er
 
 	response, error := client.Do(request)
 	statusCode := response.StatusCode
-	//102 status code means processing - so repeat call 5 times to see if we get a response
-	for count := 1; count < 5 && statusCode == http.StatusProcessing; count++ {
+	//102 status code means processing - so repeat call 2 times to see if we get a response
+	for count := 1; count < 2 && statusCode == http.StatusProcessing; count++ {
 		// Sleep for 5 seconds before the next request
 		time.Sleep(5 * time.Second)
 		response, _ := client.Do(request)
