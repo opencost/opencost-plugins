@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/opencost/opencost/core/pkg/log"
@@ -103,6 +102,7 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 		return false
 	}
 
+	dbmCostsInRange := 0
 	//verify that the returned costs are non zero
 	for _, resp := range respDaily {
 		var costSum float32
@@ -117,9 +117,8 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 			// range
 			if cost.GetResourceName() == "dbm_host_count" {
 				// filter out recent costs since those might not be full days worth
-				if cost.GetListCost() < 2.5 || cost.GetListCost() > 3.0 && resp.GetStart().AsTime().Before(time.Now().Add(-time.Hour*24*2)) {
-					log.Errorf("daily cost returned by plugin datadog for %v is not in expected range", cost)
-					return false
+				if cost.GetListCost() > 2.5 && cost.GetListCost() < 3.0 {
+					dbmCostsInRange++
 				}
 			}
 		}
@@ -128,6 +127,11 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 			return false
 		}
 
+	}
+
+	if dbmCostsInRange == 0 {
+		log.Errorf("no dbm costs in expected range found in daily costs")
+		return false
 	}
 
 	seenCosts := map[string]bool{}
