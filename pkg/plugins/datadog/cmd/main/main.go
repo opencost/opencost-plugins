@@ -340,6 +340,47 @@ func postProcess(ccResp *pb.CustomCostResponse) {
 
 	// removes any items that have 0 usage, either because of post processing or otherwise
 	ccResp.Costs = removeZeroUsages(ccResp.Costs)
+
+	// DBM queries have 200 * number of hosts included. We need to adjust the costs to reflect this
+	ccResp.Costs = adjustDBMQueries(ccResp.Costs)
+}
+
+// as per https://www.datadoghq.com/pricing/?product=database-monitoring#database-monitoring-can-i-still-use-dbm-if-i-have-additional-normalized-queries-past-the-a-hrefpricingallotmentsallotteda-amount
+// the first 200 queries per host are free.
+// if that zeroes out the dbm queries, we remove the cost
+func adjustDBMQueries(costs []*pb.CustomCost) []*pb.CustomCost {
+	totalFreeQueries := float32(0.0)
+	for index := 0; index < len(costs); index++ {
+		if costs[index].ResourceName == "dbm_host_count" {
+			hostCount := costs[index].UsageQuantity
+			totalFreeQueries += 200 * float32(hostCount)
+		}
+	}
+	log.Debugf("total free queries: %f", totalFreeQueries)
+
+	for index := 0; index < len(costs); index++ {
+		if costs[index].ResourceName == "dbm_queries_count" {
+			costs[index].UsageQuantity -= totalFreeQueries
+			log.Debugf("adjusted dbm queries: %v", costs[index])
+		}
+
+	}
+
+	for index := 0; index < len(costs); index++ {
+		if costs[index].ResourceName == "dbm_queries_count" {
+			if costs[index].UsageQuantity <= 0 {
+				log.Debugf("removing cost %s because it has 0 usage", costs[index].ProviderId)
+				costs = append(costs[:index], costs[index+1:]...)
+				index = 0
+			} else {
+				// TODO else, multiply cost by the rate for extra queries
+				costs[index].ListCost = 0.0
+				costs[index].ListUnitPrice = 0.0
+				costs[index].UsageUnit = "queries"
+			}
+		}
+	}
+	return costs
 }
 
 // removes any items that have 0 usage, either because of post processing or otherwise
@@ -471,6 +512,8 @@ var usageToPricingMap = map[string]string{
 	"opentelemetry_apm_host_count":     "apm_hosts",
 	"apm_fargate_count":                "apm_hosts",
 
+	"dbm_host_count":                 "dbm",
+	"dbm_queries_count":              "dbm_queries",
 	"container_count":                "containers",
 	"container_count_excl_agent":     "containers",
 	"billable_ingested_bytes":        "ingested_logs",
@@ -503,6 +546,7 @@ var rateFamilies = map[string]int{
 	"infra_hosts": 730.0,
 	"apm_hosts":   730.0,
 	"containers":  730.0,
+	"dbm":         730.0,
 }
 
 func getListingInfo(window opencost.Window, productfamily string, usageType string, listPricing *datadogplugin.PricingInformation) (description string, usageUnit string, pricing float32, currency string) {
@@ -518,7 +562,6 @@ func getListingInfo(window opencost.Window, productfamily string, usageType stri
 		// if it isn't, then the family is the pricing key
 		pricingKey = productfamily
 	}
-
 	matchedPrice := false
 	// search through the pricing for the right key
 	for _, detail := range listPricing.Details {
@@ -536,7 +579,7 @@ func getListingInfo(window opencost.Window, productfamily string, usageType stri
 			if hourlyPriceDenominator, found := rateFamilies[pricingKey]; found {
 				// adjust the pricing to fit the window duration
 				pricingPerHour := float32(pricingFloat) / float32(hourlyPriceDenominator)
-				pricingPerWindow := pricingPerHour //* float32(window.Duration().Hours())
+				pricingPerWindow := pricingPerHour
 				usageUnit = strings.TrimSuffix(usageUnit, "s")
 				usageUnit += " - hours"
 				pricing = pricingPerWindow
