@@ -139,7 +139,7 @@ func invokeValidator(validatorPath, hourlyPath, dailyPath string) error {
 	// invoke validator
 
 	// Create the command with the given arguments
-	cmd := exec.Command("go", "run", validatorPath, hourlyPath, dailyPath)
+	cmd := exec.Command("go", "run", validatorPath, dailyPath, hourlyPath)
 
 	// Run the command and capture the output
 	output, err := cmd.CombinedOutput()

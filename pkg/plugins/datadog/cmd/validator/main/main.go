@@ -102,16 +102,36 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 		return false
 	}
 
+	dbmCostsInRange := 0
 	//verify that the returned costs are non zero
 	for _, resp := range respDaily {
 		var costSum float32
 		for _, cost := range resp.Costs {
 			costSum += cost.GetListCost()
+			if cost.GetListCost() > 100 {
+				log.Errorf("daily cost returned by plugin datadog for %v is greater than 100", cost)
+				return false
+			}
+
+			//as of 10/2024, dbm hosts cost $84 a month or about $2.70. confirm that
+			// range
+			if cost.GetResourceName() == "dbm_host_count" {
+				// filter out recent costs since those might not be full days worth
+				if cost.GetListCost() > 2.5 && cost.GetListCost() < 3.0 {
+					dbmCostsInRange++
+				}
+			}
 		}
 		if costSum == 0 {
 			log.Errorf("daily costs returned by datadog plugin are zero")
 			return false
 		}
+
+	}
+
+	if dbmCostsInRange == 0 {
+		log.Errorf("no dbm costs in expected range found in daily costs")
+		return false
 	}
 
 	seenCosts := map[string]bool{}
@@ -130,6 +150,7 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 		"logs_indexed_events_15_day_count",
 		"container_count_excl_agent",
 		"agent_container",
+		"dbm_host_count",
 	}
 
 	for _, cost := range expectedCosts {
@@ -141,6 +162,10 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 
 	if len(seenCosts) != len(expectedCosts) {
 		log.Errorf("hourly costs returned by plugin datadog do not equal expected costs")
+		log.Errorf("seen costs: %v", seenCosts)
+		log.Errorf("expected costs: %v", expectedCosts)
+
+		log.Errorf("response: %v", respHourly)
 		return false
 	}
 
@@ -153,11 +178,15 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 	}
 
 	seenCosts = map[string]bool{}
-	for _, resp := range respDaily {
+	for _, resp := range respHourly {
 		for _, cost := range resp.Costs {
 			seenCosts[cost.GetResourceName()] = true
 			if cost.GetListCost() == 0 {
-				log.Errorf("daily cost returned by plugin datadog is zero")
+				log.Errorf("hourly cost returned by plugin datadog is zero")
+				return false
+			}
+			if cost.GetListCost() > 100 {
+				log.Errorf("hourly cost returned by plugin datadog for %v is greater than 100", cost)
 				return false
 			}
 		}
