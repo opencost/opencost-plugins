@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/opencost/opencost/core/pkg/log"
@@ -105,9 +106,17 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 	dbmCostsInRange := 0
 	//verify that the returned costs are non zero
 	for _, resp := range respDaily {
+		if len(resp.Costs) == 0 && resp.Start.AsTime().After(time.Now().Truncate(24*time.Hour).Add(-1*time.Minute)) {
+			log.Debugf("today's daily costs returned by plugin datadog are empty, skipping: %v", resp)
+			continue
+		}
 		var costSum float32
 		for _, cost := range resp.Costs {
 			costSum += cost.GetListCost()
+
+			if cost.GetListCost() == 0 {
+				log.Debugf("got zero cost for %v", cost)
+			}
 			if cost.GetListCost() > 100 {
 				log.Errorf("daily cost returned by plugin datadog for %v is greater than 100", cost)
 				return false
@@ -136,13 +145,16 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 
 	seenCosts := map[string]bool{}
 	for _, resp := range respHourly {
+		var costSum float32
 		for _, cost := range resp.Costs {
 			seenCosts[cost.GetResourceName()] = true
-			if cost.GetListCost() == 0 {
-				log.Errorf("hourly cost returned by plugin datadog is zero")
-				return false
-			}
+			costSum += cost.GetListCost()
 		}
+		if costSum == 0 {
+			log.Errorf("hourly cost returned by plugin datadog is zero")
+			return false
+		}
+
 	}
 
 	expectedCosts := []string{
