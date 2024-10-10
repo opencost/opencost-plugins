@@ -2,7 +2,7 @@ commonenv := "CGO_ENABLED=0"
 
 version := `./tools/image-tag`
 commit := `git rev-parse --short HEAD`
-pluginPaths := `find ./pkg/plugins -type f -iname "go.mod" -print0 | xargs -0 dirname | xargs basename | tr ' ' ','`
+pluginPaths := `find ./pkg/plugins -type f -iname "go.mod" -print0 | xargs -0 dirname | xargs -I{} basename {} | tr ' ' ',' | tr '\n' ','`
 default:
     just --list
 
