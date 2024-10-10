@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"regexp"
@@ -59,7 +60,7 @@ func (d *OpenAICostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Custo
 	}
 
 	if req.Resolution.AsDuration() != timeutil.Day {
-		log.Infof("openai plugin only supports hourly resolution")
+		log.Infof("openai plugin only supports daily resolution")
 		return results
 	}
 
@@ -235,9 +236,16 @@ func (d *OpenAICostSource) getOpenAIBilling(start time.Time, end time.Time) (*op
 		}
 
 		if resp.StatusCode != http.StatusOK {
+			bodyBytes, err := io.ReadAll(resp.Body)
+			bodyString := "<empty>"
+			if err != nil {
+				log.Warnf("error reading body of non-200 response: %v", err)
+				bodyString = string(bodyBytes)
+			}
+
 			errReq = fmt.Errorf("received non-200 response for billing export request: %d", resp.StatusCode)
-			log.Warnf("got non-200 response for billing export request: %d", resp.StatusCode)
-			log.Warnf("retrying requestafter 30s")
+			log.Warnf("got non-200 response for billing export request: %d, body is: %s", resp.StatusCode, bodyString)
+			log.Warnf("retrying request after 30s")
 			time.Sleep(30 * time.Second)
 			continue
 		} else {
@@ -303,8 +311,14 @@ func (d *OpenAICostSource) getOpenAITokenUsages(targetTime time.Time) (*openaipl
 
 		if resp.StatusCode != http.StatusOK {
 			errReq = fmt.Errorf("received non-200 response for token usage request: %d", resp.StatusCode)
-			log.Warnf("got non-200 response for token usage request: %d", resp.StatusCode)
-			log.Warnf("retrying requestafter 30s")
+			bodyBytes, err := io.ReadAll(resp.Body)
+			bodyString := "<empty>"
+			if err != nil {
+				log.Warnf("error reading body of non-200 response: %v", err)
+				bodyString = string(bodyBytes)
+			}
+			log.Warnf("got non-200 response for token usage request: %d, body is: %s", resp.StatusCode, bodyString)
+			log.Warnf("retrying request after 30s")
 			time.Sleep(30 * time.Second)
 			continue
 		} else {
