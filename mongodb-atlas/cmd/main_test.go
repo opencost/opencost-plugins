@@ -6,16 +6,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/icholy/digest"
 	atlasplugin "github.com/opencost/opencost-plugins/mongodb-atlas/plugin"
 	"github.com/opencost/opencost/core/pkg/model/pb"
 	"github.com/opencost/opencost/core/pkg/opencost"
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	"github.com/stretchr/testify/assert"
 )
 
 // Mock HTTPClient implementation
@@ -78,37 +80,47 @@ func TestCreateCostExplorerQueryToken(t *testing.T) {
 // mapuk = public key for mongodb atlas
 // maprk  = private key for mongodb atlas
 // maOrgId = orgId to be testsed
-// func TestMain(t *testing.T) {
+func TestMain(t *testing.T) {
 
-// 	publicKey := os.Getenv("mapuk")
-// 	privateKey := os.Getenv("maprk")
-// 	orgId := os.Getenv("maorgid")
-// 	if publicKey == "" || privateKey == "" || orgId == "" {
-// 		t.Skip("Skipping integration test.")
-// 	}
+	publicKey := os.Getenv("mapuk")
+	privateKey := os.Getenv("maprk")
+	orgId := os.Getenv("maorgid")
+	if publicKey == "" || privateKey == "" || orgId == "" {
+		t.Skip("Skipping integration test.")
+	}
 
-// 	assert.NotNil(t, publicKey)
-// 	assert.NotNil(t, privateKey)
-// 	assert.NotNil(t, orgId)
+	assert.NotNil(t, publicKey)
+	assert.NotNil(t, privateKey)
+	assert.NotNil(t, orgId)
 
-// 	client := &http.Client{
-// 		Transport: &digest.Transport{
-// 			Username: publicKey,
-// 			Password: privateKey,
-// 		},
-// 	}
+	rateLimiter := rate.NewLimiter(1.1, 2)
+	client := &http.Client{
+		Transport: &digest.Transport{
+			Username: publicKey,
+			Password: privateKey,
+		},
+	}
+	atlasCostSrc := AtlasCostSource{
+		rateLimiter: rateLimiter,
+		orgID:       orgId,
+		atlasClient: client,
+	}
 
-// 	// Define the layout that matches the format of the date string
-// 	layout := "2006-01-02"
-// 	endTime, _ := time.Parse(layout, "2024-07-01")
-// 	startTime, _ := time.Parse(layout, "2023-12-01")
-// 	url := "https://cloud.mongodb.com/api/atlas/v2/orgs/" + orgId + "/billing/costExplorer/usage"
-// 	resp, err := createCostExplorerQueryToken(orgId, startTime, endTime, client)
+	// Define the layout that matches the format of the date string
+	layout := "2006-01-02"
+	endTime, _ := time.Parse(layout, "2024-07-01")
+	startTime, _ := time.Parse(layout, "2024-06-01")
+	costRequest := pb.CustomCostRequest{
+		Start:      timestamppb.New(startTime),
+		End:        timestamppb.New(endTime),
+		Resolution: durationpb.New(time.Hour * 24 * 30),
+	}
+	var costResponse = atlasCostSrc.GetCustomCosts(&costRequest)
+	assert.Equal(t, 2, len(costResponse))
+	assert.Equal(t, 0, len(costResponse[0].Costs))
+	assert.Equal(t, 0, len(costResponse[1].Costs))
 
-// 	assert.NotEmpty(t, resp)
-// 	assert.Nil(t, err)
-
-// }
+}
 
 func TestErrorFromServer(t *testing.T) {
 
@@ -413,6 +425,60 @@ func TestGetCosts(t *testing.T) {
 
 	resp := atlasCostSource.GetCustomCosts(&customCostRequest)
 
+	assert.Equal(t, 0, len(resp))
+
+}
+
+func TestGetCostsV2(t *testing.T) {
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+
+			costResponse := getCostResponseMock()
+			if req.Method == http.MethodGet {
+				//return costs
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewBuffer(costResponse)),
+				}, nil
+			} else {
+				// Define the response that the mock client will return
+				mockResponse := atlasplugin.CreateCostExplorerQueryResponse{
+					Token: "fake",
+				}
+				mockResponseJson, _ := json.Marshal(mockResponse)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
+				}, nil
+			}
+
+		},
+	}
+	atlasCostSource := AtlasCostSource{
+		orgID:       "myOrg",
+		atlasClient: mockClient,
+	}
+	// Define the start and end time for the window
+	startTime := time.Now().Add(-(24 * 31 * time.Hour)) // 1 month ago
+	endTime := time.Now()
+
+	customCostRequest := pb.CustomCostRequest{
+		Start:      timestamppb.New(startTime),
+		End:        timestamppb.New(endTime),
+		Resolution: durationpb.New(time.Hour), // Example resolution: 1 hour
+	} // Now
+
+	resp := atlasCostSource.GetCustomCosts(&customCostRequest)
+
 	assert.Equal(t, 1, len(resp))
 
+}
+
+func TestGetAtlasWindows(t *testing.T) {
+	startDate := time.Date(2023, time.April, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	windows := GetAtlasWindows(startDate, endDate)
+
+	assert.Equal(t, 9, len(windows))
 }

@@ -90,21 +90,63 @@ type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-func (a *AtlasCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.CustomCostResponse {
-	results := []*pb.CustomCostResponse{}
+/*
+*
+splits the start and end date as monthly chunks. Each chunk should have a startdate as the first of the month
+and end date as the first day of the following month.
+*
+*/
+// GetAtlasWindows splits the start and end date into monthly chunks
+func GetAtlasWindows(startDate time.Time, endDate time.Time) []opencost.Window {
+	var windows []opencost.Window
 
-	targets, err := opencost.GetWindows(req.Start.AsTime(), req.End.AsTime(), req.Resolution.AsDuration())
-	if err != nil {
-		log.Errorf("error getting windows: %v", err)
-		errResp := pb.CustomCostResponse{
-			Errors: []string{fmt.Sprintf("error getting windows: %v", err)},
-		}
-		results = append(results, &errResp)
-		return results
+	// Ensure startDate is before endDate
+	if !startDate.Before(endDate) {
+		return windows
 	}
 
+	currentStart := startDate
+
+	for currentStart.Before(endDate) {
+		// Calculate the start of the next month
+		nextMonth := currentStart.AddDate(0, 1, 0)
+
+		// Add the window from the current month start to the next month start
+		start := currentStart // Take address of currentStart
+		end := nextMonth      // Take address of nextMonth
+		var aWindow = opencost.NewWindow(&start, &end)
+		windows = append(windows, aWindow)
+
+		// Move to the start of the next month
+		currentStart = nextMonth
+	}
+
+	return windows
+}
+
+func (a *AtlasCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.CustomCostResponse {
+	results := []*pb.CustomCostResponse{}
+	//MongoDB atlas needs dates as start of date of each month and calculated monthly
+
+	// Find the first day of the month
+	firstOfMonthOfStartDate := time.Date(req.Start.AsTime().Year(), req.Start.AsTime().Month(),
+		1, 0, 0, 0, 0, req.Start.AsTime().Location())
+	nextMonthAfterEnd := time.Date(req.End.AsTime().Year(), req.End.AsTime().Month(), 1, 0, 0, 0, 0, req.End.AsTime().Location()).AddDate(0, 1, 0)
+
+	//TODO divide up windows into monthly pieces
+	targets := GetAtlasWindows(firstOfMonthOfStartDate, nextMonthAfterEnd)
+	//targets, err := opencost.GetWindows(req.Start.AsTime(), req.End.AsTime(), req.Resolution.AsDuration())
+	// if err != nil {
+	// 	log.Errorf("error getting windows: %v", err)
+	// 	errResp := pb.CustomCostResponse{
+	// 		Errors: []string{fmt.Sprintf("error getting windows: %v", err)},
+	// 	}
+	// 	results = append(results, &errResp)
+	// 	return results
+	// }
+
 	for _, target := range targets {
-		if target.Start().After(time.Now().UTC()) {
+		if target.Start().After(time.Now().UTC()) || target.End().After(time.Now().UTC()) {
 			log.Debugf("skipping future window %v", target)
 			continue
 		}
