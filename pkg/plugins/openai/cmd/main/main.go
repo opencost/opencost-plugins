@@ -240,6 +240,7 @@ func (d *OpenAICostSource) getOpenAIBilling(start time.Time, end time.Time) (*op
 			bodyString := "<empty>"
 			if err != nil {
 				log.Warnf("error reading body of non-200 response: %v", err)
+			} else {
 				bodyString = string(bodyBytes)
 			}
 
@@ -315,6 +316,7 @@ func (d *OpenAICostSource) getOpenAITokenUsages(targetTime time.Time) (*openaipl
 			bodyString := "<empty>"
 			if err != nil {
 				log.Warnf("error reading body of non-200 response: %v", err)
+			} else {
 				bodyString = string(bodyBytes)
 			}
 			log.Warnf("got non-200 response for token usage request: %d, body is: %s", resp.StatusCode, bodyString)
