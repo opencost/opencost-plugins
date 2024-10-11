@@ -677,7 +677,7 @@ func scrapeDatadogPrices(url string) (*datadogplugin.PricingInformation, error) 
 		}
 		response.Body.Close()
 		res := datadogplugin.DatadogProJSON{}
-		r := regexp.MustCompile(`var productDetailData = \s*(.*?)\s*;`)
+		r := regexp.MustCompile(`var productDetailData = \s*(.*?)\s*};`)
 		log.Tracef("got response: %s", string(b))
 		matches := r.FindAllStringSubmatch(string(b), -1)
 		if len(matches) != 1 {
@@ -688,7 +688,8 @@ func scrapeDatadogPrices(url string) (*datadogplugin.PricingInformation, error) 
 		}
 
 		log.Tracef("matches[0][1]:" + matches[0][1])
-		err = json.Unmarshal([]byte(matches[0][1]), &res)
+		// add back in the closing curly brace that was used to pattern match
+		err = json.Unmarshal([]byte(matches[0][1]+"}"), &res)
 		if err != nil {
 			errTry = err
 			log.Errorf("failed to read pricing page body: %v", err)
