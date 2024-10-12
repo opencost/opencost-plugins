@@ -1,13 +1,15 @@
-module github.com/opencost/opencost-plugins/datadog
+module github.com/opencost/opencost-plugins/pkg/plugins/datadog
 
 go 1.22.2
 
-replace github.com/opencost/opencost-plugins/common => ../common
+replace github.com/opencost/opencost-plugins/pkg/common => ../../common
 
 require (
 	github.com/DataDog/datadog-api-client-go/v2 v2.23.0
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/hashicorp/go-plugin v1.6.0
+	github.com/opencost/opencost-plugins/datadog v0.0.0-20240429172518-a50cd1290864
+	github.com/opencost/opencost-plugins/pkg/common v0.0.0-00010101000000-000000000000
 	github.com/opencost/opencost-plugins/test v0.0.0-20240307142929-df4df8ee69fa
 	github.com/opencost/opencost/core v0.0.0-20240307141548-816f98c9051a
 	golang.org/x/time v0.5.0
@@ -38,7 +40,6 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/oklog/run v1.1.0 // indirect
-	github.com/opencost/opencost-plugins/common v0.0.0-00010101000000-000000000000 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pelletier/go-toml/v2 v2.1.1 // indirect
 	github.com/rs/zerolog v1.32.0 // indirect

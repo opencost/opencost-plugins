@@ -11,8 +11,8 @@ import (
 	"github.com/hashicorp/go-plugin"
 	"github.com/icholy/digest"
 	commonconfig "github.com/opencost/opencost-plugins/common/config"
-	atlasconfig "github.com/opencost/opencost-plugins/mongodb-atlas/config"
-	atlasplugin "github.com/opencost/opencost-plugins/mongodb-atlas/plugin"
+	atlasconfig "github.com/opencost/opencost-plugins/pkg/plugins/mongodb-atlas/config"
+	atlasplugin "github.com/opencost/opencost-plugins/pkg/plugins/mongodb-atlas/plugin"
 	"github.com/opencost/opencost/core/pkg/log"
 	"github.com/opencost/opencost/core/pkg/model/pb"
 	"github.com/opencost/opencost/core/pkg/opencost"
@@ -35,7 +35,7 @@ const costExplorerFmt = "https://cloud.mongodb.com/api/atlas/v2/orgs/%s/billing/
 const costExplorerQueryFmt = "https://cloud.mongodb.com/api/atlas/v2/orgs/%s/billing/costExplorer/usage/%s"
 
 func main() {
-	fmt.Println("Initializing Mongo plugin")
+	log.Debug("Initializing Mongo plugin")
 
 	configFile, err := commonconfig.GetConfigFilePath()
 	if err != nil {

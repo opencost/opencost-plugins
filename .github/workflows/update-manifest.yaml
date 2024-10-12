@@ -1,0 +1,47 @@
+name: Update Manifest
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  update-manifest:
+    runs-on: ubuntu-latest
+    steps:
+        - name: echo actor
+          run: echo "actor is ${{ github.actor }}"
+        - uses: actions/checkout@v4
+          with:
+            path: ./
+            ssh-key: ${{ secrets.GH_SSH_KEY}}
+            persist-credentials: true
+        - name: update current plugin list
+          run: | 
+               plugins=$(ls pkg/plugins | tr -s ' ' | sort)
+               echo "got plugins: $plugins"
+               echo '# this manifest contains the name of every currently implemented plugin. it can be pulled via https://github.com/opencost/opencost-plugins/raw/main/manifest to get an up to date list of current plugins.
+               ' > manifest
+               echo "$plugins" >> manifest
+               echo "manifest updated"
+               echo "manifest contents:"
+               cat manifest
+
+        - name: Commit changes
+          run: |
+              git config --local user.email "github-actions[bot]@noreply.example.com"
+              git config --local user.name "github-actions[bot]"
+              git add manifest || true
+              git commit -m "update manifest" || true
+    
+        - name: update manifest
+          uses: ad-m/github-push-action@master
+          with:
+              ssh: true
+              directory: .
+              repository: opencost/opencost-plugins
+              branch: main
+
+
+               
+          

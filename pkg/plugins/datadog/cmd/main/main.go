@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	_nethttp "net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
-
-	"os"
 
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadogV2"
@@ -19,8 +19,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/hashicorp/go-plugin"
-	commonconfig "github.com/opencost/opencost-plugins/common/config"
-	datadogplugin "github.com/opencost/opencost-plugins/datadog/datadogplugin"
+	commonconfig "github.com/opencost/opencost-plugins/pkg/common/config"
+	datadogplugin "github.com/opencost/opencost-plugins/pkg/plugins/datadog/datadogplugin"
 	"github.com/opencost/opencost/core/pkg/log"
 	"github.com/opencost/opencost/core/pkg/model/pb"
 	"github.com/opencost/opencost/core/pkg/opencost"
@@ -101,7 +101,7 @@ func main() {
 	}
 	log.SetLogLevel(ddConfig.DDLogLevel)
 	// datadog usage APIs allow 10 requests every 30 seconds
-	rateLimiter := rate.NewLimiter(0.25, 5)
+	rateLimiter := rate.NewLimiter(0.1, 1)
 	ddCostSrc := DatadogCostSource{
 		rateLimiter: rateLimiter,
 	}
@@ -153,11 +153,32 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 			return &ccResp
 		}
 
-		params.FilterTimestampEnd = window.End()
-		resp, r, err := d.usageApi.GetHourlyUsage(d.ddCtx, *window.Start(), "all", *params)
+		maxTries := 5
+		try := 1
+		var resp datadogV2.HourlyUsageResponse
+		for try <= maxTries {
+			params.FilterTimestampEnd = window.End()
+			var r *_nethttp.Response
+			resp, r, err = d.usageApi.GetHourlyUsage(d.ddCtx, *window.Start(), "all", *params)
+			if err != nil {
+				log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
+				log.Errorf("Full HTTP response: %v\n", r)
+			}
+
+			if err == nil {
+				break
+			} else {
+				if strings.Contains(err.Error(), "429") {
+					log.Errorf("rate limit reached, retrying...")
+				}
+				time.Sleep(30 * time.Second)
+				try++
+			}
+
+		}
+
 		if err != nil {
-			log.Errorf("Error when calling `UsageMeteringApi.GetHourlyUsage`: %v\n", err)
-			log.Errorf("Full HTTP response: %v\n", r)
+			log.Errorf("after calling `UsageMeteringApi.GetHourlyUsage` %d times, still getting error: %v\n", maxTries, err)
 			ccResp.Errors = append(ccResp.Errors, err.Error())
 		}
 
@@ -319,6 +340,47 @@ func postProcess(ccResp *pb.CustomCostResponse) {
 
 	// removes any items that have 0 usage, either because of post processing or otherwise
 	ccResp.Costs = removeZeroUsages(ccResp.Costs)
+
+	// DBM queries have 200 * number of hosts included. We need to adjust the costs to reflect this
+	ccResp.Costs = adjustDBMQueries(ccResp.Costs)
+}
+
+// as per https://www.datadoghq.com/pricing/?product=database-monitoring#database-monitoring-can-i-still-use-dbm-if-i-have-additional-normalized-queries-past-the-a-hrefpricingallotmentsallotteda-amount
+// the first 200 queries per host are free.
+// if that zeroes out the dbm queries, we remove the cost
+func adjustDBMQueries(costs []*pb.CustomCost) []*pb.CustomCost {
+	totalFreeQueries := float32(0.0)
+	for index := 0; index < len(costs); index++ {
+		if costs[index].ResourceName == "dbm_host_count" {
+			hostCount := costs[index].UsageQuantity
+			totalFreeQueries += 200 * float32(hostCount)
+		}
+	}
+	log.Debugf("total free queries: %f", totalFreeQueries)
+
+	for index := 0; index < len(costs); index++ {
+		if costs[index].ResourceName == "dbm_queries_count" {
+			costs[index].UsageQuantity -= totalFreeQueries
+			log.Debugf("adjusted dbm queries: %v", costs[index])
+		}
+
+	}
+
+	for index := 0; index < len(costs); index++ {
+		if costs[index].ResourceName == "dbm_queries_count" {
+			if costs[index].UsageQuantity <= 0 {
+				log.Debugf("removing cost %s because it has 0 usage", costs[index].ProviderId)
+				costs = append(costs[:index], costs[index+1:]...)
+				index = 0
+			} else {
+				// TODO else, multiply cost by the rate for extra queries
+				costs[index].ListCost = 0.0
+				costs[index].ListUnitPrice = 0.0
+				costs[index].UsageUnit = "queries"
+			}
+		}
+	}
+	return costs
 }
 
 // removes any items that have 0 usage, either because of post processing or otherwise
@@ -450,6 +512,8 @@ var usageToPricingMap = map[string]string{
 	"opentelemetry_apm_host_count":     "apm_hosts",
 	"apm_fargate_count":                "apm_hosts",
 
+	"dbm_host_count":                 "dbm",
+	"dbm_queries_count":              "dbm_queries",
 	"container_count":                "containers",
 	"container_count_excl_agent":     "containers",
 	"billable_ingested_bytes":        "ingested_logs",
@@ -482,6 +546,7 @@ var rateFamilies = map[string]int{
 	"infra_hosts": 730.0,
 	"apm_hosts":   730.0,
 	"containers":  730.0,
+	"dbm":         730.0,
 }
 
 func getListingInfo(window opencost.Window, productfamily string, usageType string, listPricing *datadogplugin.PricingInformation) (description string, usageUnit string, pricing float32, currency string) {
@@ -497,7 +562,6 @@ func getListingInfo(window opencost.Window, productfamily string, usageType stri
 		// if it isn't, then the family is the pricing key
 		pricingKey = productfamily
 	}
-
 	matchedPrice := false
 	// search through the pricing for the right key
 	for _, detail := range listPricing.Details {
@@ -515,7 +579,7 @@ func getListingInfo(window opencost.Window, productfamily string, usageType stri
 			if hourlyPriceDenominator, found := rateFamilies[pricingKey]; found {
 				// adjust the pricing to fit the window duration
 				pricingPerHour := float32(pricingFloat) / float32(hourlyPriceDenominator)
-				pricingPerWindow := pricingPerHour //* float32(window.Duration().Hours())
+				pricingPerWindow := pricingPerHour
 				usageUnit = strings.TrimSuffix(usageUnit, "s")
 				usageUnit += " - hours"
 				pricing = pricingPerWindow
@@ -589,34 +653,58 @@ func getDatadogConfig(configFilePath string) (*datadogplugin.DatadogConfig, erro
 }
 
 func scrapeDatadogPrices(url string) (*datadogplugin.PricingInformation, error) {
-	// Send a GET request to the URL
-	response, err := http.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch the page: %v", err)
-	}
-	defer response.Body.Close()
+	maxTries := 5
+	var result *datadogplugin.PricingInformation
+	var errTry error
+	for try := 1; try <= maxTries; try++ {
+		var response *http.Response
+		// Send a GET request to the URL
+		response, errTry = http.Get(url)
+		if errTry != nil || response.StatusCode != http.StatusOK {
+			log.Errorf("failed to fetch the page: %v", errTry)
+			time.Sleep(30 * time.Second)
+			response.Body.Close()
+			continue
+		}
 
-	// Check if the request was successful
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to retrieve pricing page. Status code: %d", response.StatusCode)
-	}
-	b, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read pricing page body: %v", err)
-	}
-	res := datadogplugin.DatadogProJSON{}
-	r := regexp.MustCompile(`var productDetailData = \s*(.*?)\s*;`)
-	log.Tracef("got response: %s", string(b))
-	matches := r.FindAllStringSubmatch(string(b), -1)
-	if len(matches) != 1 {
-		return nil, fmt.Errorf("requires exactly 1 product detail data, got %d", len(matches))
+		b, err := io.ReadAll(response.Body)
+		if err != nil {
+			errTry = err
+			response.Body.Close()
+			log.Errorf("failed to read pricing page body: %v", err)
+			time.Sleep(30 * time.Second)
+			continue
+		}
+		response.Body.Close()
+		res := datadogplugin.DatadogProJSON{}
+		r := regexp.MustCompile(`var productDetailData = \s*(.*?)\s*;`)
+		log.Tracef("got response: %s", string(b))
+		matches := r.FindAllStringSubmatch(string(b), -1)
+		if len(matches) != 1 {
+			errTry = err
+			log.Errorf("requires exactly 1 product detail data, got %d", len(matches))
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		log.Tracef("matches[0][1]:" + matches[0][1])
+		err = json.Unmarshal([]byte(matches[0][1]), &res)
+		if err != nil {
+			errTry = err
+			log.Errorf("failed to read pricing page body: %v", err)
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		if errTry == nil {
+			result = &res.OfferData.PricingInformation
+			break
+		}
+
 	}
 
-	log.Tracef("matches[0][1]:" + matches[0][1])
-	err = json.Unmarshal([]byte(matches[0][1]), &res)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read pricing page body: %v", err)
+	if errTry != nil {
+		return nil, fmt.Errorf("failed to fetch the page after %d tries: %w", maxTries, errTry)
 	}
-
-	return &res.OfferData.PricingInformation, nil
+	return result, nil
 }

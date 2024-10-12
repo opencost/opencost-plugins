@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	atlasplugin "github.com/opencost/opencost-plugins/mongodb-atlas/plugin"
+	atlasplugin "github.com/opencost/opencost-plugins/pkg/plugins/mongodb-atlas/plugin"
 	"github.com/opencost/opencost/core/pkg/model/pb"
 	"github.com/opencost/opencost/core/pkg/opencost"
 	"google.golang.org/protobuf/types/known/durationpb"

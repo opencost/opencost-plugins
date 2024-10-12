@@ -1,0 +1,66 @@
+name: Run Integration Tests
+
+on:
+    push:
+        branches:
+            - main
+    schedule:
+        - cron: "0 5 * * *"
+
+jobs:
+  integration-test-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: oNaiPs/secrets-to-env-action@v1
+        with:
+          secrets: ${{ toJSON(secrets) }}
+      - uses: actions/checkout@v4
+        with:
+          path: ./
+          ref: main
+      - name: Install just
+        uses: extractions/setup-just@v2
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+      - name: prep workspace
+        run: |
+            just init-workspace
+      - name: run integration tests
+        run: |
+          just integration-test-all-plugins
+
+
+  notify-fail:
+    needs: [integration-test-runner]
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+      - name: Slack notify
+        id: slack
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "workflow": "${{github.workflow}}",
+              "message": "Plugin Integration tests have failed! Please check the logs for more information."
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+  notify-success:
+            needs: [integration-test-runner]
+            runs-on: ubuntu-latest
+            if: success()
+            steps:
+              - name: Slack notify
+                id: slack
+                uses: slackapi/slack-github-action@v1
+                with:
+                  payload: |
+                            {
+                              "workflow": "${{github.workflow}}",
+                              "message": "Plugin Integration tests have passed! :tada:"
+                            }
+                env:
+                  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}

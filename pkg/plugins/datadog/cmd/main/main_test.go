@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	datadogplugin "github.com/opencost/opencost-plugins/datadog/datadogplugin"
+	datadogplugin "github.com/opencost/opencost-plugins/pkg/plugins/datadog/datadogplugin"
 	"github.com/opencost/opencost/core/pkg/log"
 	"github.com/opencost/opencost/core/pkg/model/pb"
 	"github.com/opencost/opencost/core/pkg/util/timeutil"
@@ -62,9 +62,9 @@ func TestGetCustomCosts(t *testing.T) {
 		rateLimiter: rateLimiter,
 	}
 	ddCostSrc.ddCtx, ddCostSrc.usageApi = getDatadogClients(config)
-	windowStart := time.Date(2024, 3, 11, 0, 0, 0, 0, time.UTC)
+	windowStart := time.Date(2024, 10, 6, 0, 0, 0, 0, time.UTC)
 	// query for qty 2 of 1 hour windows
-	windowEnd := time.Date(2024, 3, 12, 0, 0, 0, 0, time.UTC)
+	windowEnd := time.Date(2024, 10, 7, 0, 0, 0, 0, time.UTC)
 
 	req := &pb.CustomCostRequest{
 		Start:      timestamppb.New(windowStart),

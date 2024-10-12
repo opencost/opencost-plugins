@@ -1,8 +1,8 @@
-module github.com/opencost/opencost-plugins/mongodb-atlas
+module github.com/opencost/opencost-plugins/pkg/plugins/mongodb-atlas
 
 go 1.22.5
 
-replace github.com/opencost/opencost-plugins/common => ../common
+replace github.com/opencost/opencost-plugins/common => ../../common
 
 require github.com/icholy/digest v0.1.23
 
