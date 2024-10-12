@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"testing"
 )
@@ -8,25 +9,25 @@ import (
 // Unit tests for the GetAtlasConfig function
 func TestGetAtlasConfig(t *testing.T) {
 	// Test: Valid configuration file
-	// t.Run("Valid configuration file", func(t *testing.T) {
-	// 	configFilePath := "test_valid_config.json"
-	// 	// Create a temporary valid JSON file
-	// 	validConfig := `{"log_level": "debug"}`
-	// 	err := os.WriteFile(configFilePath, []byte(validConfig), 0644)
-	// 	if err != nil {
-	// 		t.Fatalf("failed to create temporary config file: %v", err)
-	// 	}
-	// 	defer os.Remove(configFilePath)
+	t.Run("Valid configuration file", func(t *testing.T) {
+		configFilePath := "test_valid_config.json"
+		// Create a temporary valid JSON file
+		validConfig := `{"atlas_plugin_log_level": "debug"}`
+		err := os.WriteFile(configFilePath, []byte(validConfig), 0644)
+		if err != nil {
+			t.Fatalf("failed to create temporary config file: %v", err)
+		}
+		defer os.Remove(configFilePath)
 
-	// 	config, err := GetAtlasConfig(configFilePath)
-	// 	if err != nil {
-	// 		t.Fatalf("expected no error, but got: %v", err)
-	// 	}
-	// 	fmt.Println(config, configFilePath)
-	// 	if config.LogLevel != "debug" {
-	// 		t.Errorf("expected log level to be 'debug', but got: %s", config.LogLevel)
-	// 	}
-	// })
+		config, err := GetAtlasConfig(configFilePath)
+		if err != nil {
+			t.Fatalf("expected no error, but got: %v", err)
+		}
+		fmt.Println(config, configFilePath)
+		if config.LogLevel != "debug" {
+			t.Errorf("expected log level to be 'debug', but got: %s", config.LogLevel)
+		}
+	})
 
 	// Test: Invalid file path
 	t.Run("Invalid file path", func(t *testing.T) {
