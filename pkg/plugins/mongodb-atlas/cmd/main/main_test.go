@@ -124,17 +124,16 @@ func TestGetCostsPendingInvoices(t *testing.T) {
 			}, nil
 		},
 	}
-	costs, err := GetPendingInvoices("myOrg", mockClient)
+	lineItems, err := GetPendingInvoices("myOrg", mockClient)
 	assert.Nil(t, err)
-	assert.Equal(t, 1, len(costs))
+	assert.Equal(t, 1, len(lineItems))
 
-	//TODO
-	// for i, invoice := range costResponse.UsageDetails {
-	// 	assert.Equal(t, invoice.InvoiceId, costs[i].Id)
-	// 	assert.Equal(t, invoice.OrganizationName, costs[i].AccountName)
-	// 	assert.Equal(t, invoice.Service, costs[i].ChargeCategory)
-	// 	assert.Equal(t, invoice.UsageAmount, costs[i].BilledCost)
-	// }
+	for _, invoice := range pendingInvoiceResponse.LineItems {
+		assert.Equal(t, "kubecost-mongo-dev-1", invoice.ClusterName)
+		assert.Equal(t, "66d7254246a21a41036ff33e", invoice.GroupId)
+		assert.Equal(t, "Project 0", invoice.GroupName)
+		//TODO add more asserts on the fields
+	}
 }
 
 func TestGetCostErrorFromServer(t *testing.T) {
@@ -172,26 +171,6 @@ func TestGetCostsBadMessage(t *testing.T) {
 	_, error := GetPendingInvoices("myOrd", mockClient)
 	assert.NotEmpty(t, error)
 
-}
-
-// TODO delete this
-func getCostResponseMock() []byte {
-	costResponse := atlasplugin.CostResponse{
-		UsageDetails: []atlasplugin.Invoice{
-
-			{
-				InvoiceId:        "INV003",
-				OrganizationId:   "ORG125",
-				OrganizationName: "Gamma Inc",
-				Service:          "Networking",
-				UsageAmount:      50.00,
-				UsageDate:        "2024-10-03",
-			},
-		},
-	}
-
-	mockResponseJson, _ := json.Marshal(costResponse)
-	return mockResponseJson
 }
 
 func TestGetAtlasCostsForWindow(t *testing.T) {
@@ -246,15 +225,37 @@ func TestGetAtlasCostsForWindow(t *testing.T) {
 }
 
 func TestGetCosts(t *testing.T) {
+	pendingInvoiceResponse := atlasplugin.PendingInvoice{
+		AmountBilledCents: 0,
+		AmountPaidCents:   0,
+		Created:           "2024-10-01T02:00:26Z",
+		CreditsCents:      0,
+		EndDate:           "2024-11-01T00:00:00Z",
+		Id:                "66fb726b79b56205f9376437",
+		LineItems:         []atlasplugin.LineItem{},
+		Links: []atlasplugin.Link{
+			{
+				Href: "https://cloud.mongodb.com/api/atlas/v2/orgs/66d7254246a21a41036ff2e9",
+				Rel:  "self",
+			},
+		},
+		OrgId:                "66d7254246a21a41036ff2e9",
+		SalesTaxCents:        0,
+		StartDate:            "2024-10-01T00:00:00Z",
+		StartingBalanceCents: 0,
+		StatusName:           "PENDING",
+		SubTotalCents:        0,
+		Updated:              "2024-10-01T02:00:26Z",
+	}
+
+	mockResponseJson, _ := json.Marshal(pendingInvoiceResponse)
 	mockClient := &MockHTTPClient{
 		DoFunc: func(req *http.Request) (*http.Response, error) {
-
-			costResponse := getCostResponseMock()
 
 			//return costs
 			return &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewBuffer(costResponse)),
+				Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
 			}, nil
 
 		},
@@ -264,19 +265,21 @@ func TestGetCosts(t *testing.T) {
 		atlasClient: mockClient,
 	}
 	// Define the start and end time for the window
-	startTime := time.Now().Add(-24 * time.Hour) // 24 hours ago
-	endTime := time.Now()
+	now := time.Now()
+	currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 
 	customCostRequest := pb.CustomCostRequest{
-		Start:      timestamppb.New(startTime),
-		End:        timestamppb.New(endTime),
-		Resolution: durationpb.New(time.Hour), // Example resolution: 1 hour
-	} // Now
+		Start:      timestamppb.New(currentMonthStart),                     // Start in current month
+		End:        timestamppb.New(currentMonthStart.Add(48 * time.Hour)), // End in current month
+		Resolution: durationpb.New(24 * time.Hour),                         // 1 day resolution
+
+	}
 
 	resp := atlasCostSource.GetCustomCosts(&customCostRequest)
 
-	assert.Equal(t, 1, len(resp))
-
+	assert.Equal(t, 2, len(resp))
+	assert.True(t, len(resp[0].Costs) == 0)
+	assert.True(t, len(resp[1].Costs) == 0)
 }
 
 func TestValidateRequest(t *testing.T) {

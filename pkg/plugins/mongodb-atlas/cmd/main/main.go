@@ -97,7 +97,7 @@ func validateRequest(req *pb.CustomCostRequest) []string {
 		errors = append(errors, "Resolution should be at least one day.")
 	}
 	// Get the start of the current month
-	currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 
 	// 2. Check if start time is before the start of the current month
 	if req.Start.AsTime().Before(currentMonthStart) {
