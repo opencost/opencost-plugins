@@ -195,41 +195,47 @@ func getCostResponseMock() []byte {
 }
 
 func TestGetAtlasCostsForWindow(t *testing.T) {
-	mockClient := &MockHTTPClient{
-		DoFunc: func(req *http.Request) (*http.Response, error) {
 
-			costResponse := getCostResponseMock()
-			if req.Method == http.MethodGet {
-				//return costs
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewBuffer(costResponse)),
-				}, nil
-			} else {
-				// Define the response that the mock client will return
-				mockResponse := atlasplugin.CreateCostExplorerQueryResponse{
-					Token: "fake",
-				}
-				mockResponseJson, _ := json.Marshal(mockResponse)
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
-				}, nil
-			}
-
-		},
-	}
 	atlasCostSource := AtlasCostSource{
-		orgID:       "myOrg",
-		atlasClient: mockClient,
+		orgID: "myOrg",
 	}
 	// Define the start and end time for the window
-	startTime := time.Now().Add(-24 * time.Hour) // 24 hours ago
-	endTime := time.Now()                        // Now
+	day1 := time.Date(2024, time.October, 12, 0, 0, 0, 0, time.UTC) // Now
+
+	day2 := time.Date(2024, time.October, 13, 0, 0, 0, 0, time.UTC)
+	day3 := time.Date(2024, time.October, 14, 0, 0, 0, 0, time.UTC) // Now
+	lineItems := []atlasplugin.LineItem{
+		{
+			ClusterName:      "kubecost-mongo-dev-1",
+			Created:          "2024-10-11T02:57:56Z",
+			EndDate:          day3.Format("2006-01-02T15:04:05Z07:00"),
+			GroupId:          "66d7254246a21a41036ff33e",
+			GroupName:        "Project 0",
+			Quantity:         6.035e-07,
+			SKU:              "ATLAS_AWS_DATA_TRANSFER_DIFFERENT_REGION",
+			StartDate:        day2.Format("2006-01-02T15:04:05Z07:00"),
+			TotalPriceCents:  0,
+			Unit:             "GB",
+			UnitPriceDollars: 0.02,
+		},
+		{
+			ClusterName:      "kubecost-mongo-dev-1",
+			Created:          "2024-10-11T02:57:56Z",
+			EndDate:          day2.Format("2006-01-02T15:04:05Z07:00"),
+			GroupId:          "66d7254246a21a41036ff33e",
+			GroupName:        "Project 0",
+			Quantity:         0.0555,
+			SKU:              "ATLAS_AWS_DATA_TRANSFER_DIFFERENT_REGION",
+			StartDate:        day1.Add(-24 * time.Hour).Format("2006-01-02T15:04:05Z07:00"),
+			TotalPriceCents:  0,
+			Unit:             "GB",
+			UnitPriceDollars: 0.03,
+		},
+	}
 
 	// Create a new Window instance
-	window := opencost.NewWindow(&startTime, &endTime)
-	resp, error := atlasCostSource.getAtlasCostsForWindow(&window)
+	window := opencost.NewWindow(&day2, &day3)
+	resp, error := atlasCostSource.getAtlasCostsForWindow(&window, lineItems)
 	assert.Nil(t, error)
 	assert.True(t, resp != nil)
 	assert.Equal(t, "data_storage", resp.CostSource)
@@ -244,23 +250,12 @@ func TestGetCosts(t *testing.T) {
 		DoFunc: func(req *http.Request) (*http.Response, error) {
 
 			costResponse := getCostResponseMock()
-			if req.Method == http.MethodGet {
-				//return costs
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewBuffer(costResponse)),
-				}, nil
-			} else {
-				// Define the response that the mock client will return
-				mockResponse := atlasplugin.CreateCostExplorerQueryResponse{
-					Token: "fake",
-				}
-				mockResponseJson, _ := json.Marshal(mockResponse)
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
-				}, nil
-			}
+
+			//return costs
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBuffer(costResponse)),
+			}, nil
 
 		},
 	}
@@ -347,4 +342,59 @@ func TestValidateRequest(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFilterInvoicesOnWindow(t *testing.T) {
+	// Setup test data
+	//day3.Format("2006-01-02T15:04:05Z07:00")
+	windowStart := time.Date(2024, time.October, 1, 0, 0, 0, 0, time.UTC)
+	windowEnd := time.Date(2024, time.October, 31, 0, 0, 0, 0, time.UTC)
+	window := opencost.NewWindow(&windowStart, &windowEnd)
+
+	lineItems := []atlasplugin.LineItem{
+		{StartDate: "2024-10-05T00:00:00Z", EndDate: "2024-10-10T00:00:00Z", UnitPriceDollars: 1.0, GroupName: "kubecost0",
+			SKU: "0", ClusterName: "cluster-0", GroupId: "A", TotalPriceCents: 45, Quantity: 2, Unit: "GB"}, // Within window
+		{StartDate: "2024-09-01T00:00:00Z", EndDate: "2024-09-30T00:00:00Z"},                         // Before window
+		{StartDate: "2024-11-01T00:00:00Z", EndDate: "2024-11-10T00:00:00Z"},                         // After window
+		{StartDate: "2024-10-01T00:00:00Z", EndDate: "2024-10-31T00:00:00Z", UnitPriceDollars: 5},    // Exactly matching the window
+		{StartDate: "2024-10-15T00:00:00Z", EndDate: "2024-10-20T00:00:00Z", UnitPriceDollars: 2.45}, // Fully within window
+		{StartDate: "2024-09-25T00:00:00Z", EndDate: "2024-10-13T00:00:00Z"},                         // Partially in window
+		{StartDate: "2024-10-12T00:00:00Z", EndDate: "2024-11-01T00:00:00Z"},                         // Partially in window
+	}
+
+	filteredItems := filterLineItemsByWindow(&window, lineItems)
+
+	// Verify results
+	assert.Equal(t, 3, len(filteredItems), "Expected 3 line items to be filtered")
+
+	//Check if the filtered items are the correct ones
+	expectedFilteredDates := []pb.CustomCost{
+		{
+			ListUnitPrice: 1.0,
+		},
+		{
+			ListUnitPrice: 5,
+		},
+		{
+			ListUnitPrice: 2.45,
+		},
+	}
+
+	for i, item := range filteredItems {
+		assert.Equal(t, expectedFilteredDates[i].ListUnitPrice, item.ListUnitPrice, "Unit price mismatch")
+
+	}
+	//assert mapping to CustomCost object
+
+	assert.Equal(t, lineItems[0].GroupName, filteredItems[0].AccountName, "accout name mismatch")
+	assert.Equal(t, "Usage", filteredItems[0].ChargeCategory)
+	assert.Equal(t, "Usage for 0", filteredItems[0].Description)
+	assert.Equal(t, "0", filteredItems[0].ResourceName)
+	assert.NotNil(t, filteredItems[0].Id)
+	assert.NotNil(t, filteredItems[0].ProviderId)
+
+	assert.InDelta(t, lineItems[0].TotalPriceCents/100, filteredItems[0].BilledCost, 0.01)
+	assert.InDelta(t, filteredItems[0].ListCost, lineItems[0].Quantity*lineItems[0].UnitPriceDollars, 0.01)
+	assert.Equal(t, lineItems[0].Quantity, filteredItems[0].UsageQuantity)
+	assert.Equal(t, filteredItems[0].UsageUnit, lineItems[0].Unit)
 }

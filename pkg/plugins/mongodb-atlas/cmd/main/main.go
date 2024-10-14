@@ -18,6 +18,7 @@ import (
 	ocplugin "github.com/opencost/opencost/core/pkg/plugin"
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"k8s.io/apimachinery/pkg/util/uuid"
 )
 
 // handshakeConfigs are used to just do a basic handshake between
@@ -131,7 +132,9 @@ func (a *AtlasCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Custom
 		results = append(results, &errResp)
 		return results
 	}
-	costs, err := GetPendingInvoices(a.orgID, a.atlasClient)
+
+	lineItems, err := GetPendingInvoices(a.orgID, a.atlasClient)
+
 	if err != nil {
 		log.Errorf("Error fetching invoices: %v", err)
 		errResp := pb.CustomCostResponse{
@@ -149,7 +152,7 @@ func (a *AtlasCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Custom
 		}
 
 		log.Debugf("fetching atlas costs for window %v", target)
-		result, err := a.getAtlasCostsForWindow(&target, costs)
+		result, err := a.getAtlasCostsForWindow(&target, lineItems)
 		if err != nil {
 			log.Errorf("error getting costs for window %v: %v", target, err)
 			errResp := pb.CustomCostResponse{}
@@ -163,32 +166,58 @@ func (a *AtlasCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Custom
 	return results
 }
 
-func filterLineItemsByWindow(win *opencost.Window, lineItems []*pb.CustomCost) []*pb.CustomCost {
+func filterLineItemsByWindow(win *opencost.Window, lineItems []atlasplugin.LineItem) []*pb.CustomCost {
 	var filteredItems []*pb.CustomCost
 
+	winStartUTC := win.Start().UTC()
+	winEndUTC := win.End().UTC()
+	log.Debugf("Item window %s %s", winStartUTC, winEndUTC)
 	// Iterate over each line item
 	for _, item := range lineItems {
 		// Parse StartDate and EndDate from strings to time.Time
-		startDate, err1 := time.Parse("2006-01-02", item.StartDate) // Assuming date format is YYYY-MM-DD
-		endDate, err2 := time.Parse("2006-01-02", item.EndDate)     // Same format assumption
+		startDate, err1 := time.Parse("2006-01-02T15:04:05Z07:00", item.StartDate) // Assuming date format is "2006-01-02T15:04:05Z07:00"
+		endDate, err2 := time.Parse("2006-01-02T15:04:05Z07:00", item.EndDate)     // Same format assumption
 
 		if err1 != nil || err2 != nil {
 			// If parsing fails, skip this item
 			continue
 		}
+		// 	// Iterate over the UsageDetails in CostResponse
+		// for _, lineItem := range pendingInvoicesResponse.LineItems {
+		// Create a new pb.CustomCost for each LineItem
+		//log.Debugf("Line item %v", item)
+		customCost := &pb.CustomCost{
 
+			AccountName:    item.GroupName,
+			ChargeCategory: "Usage",
+			Description:    fmt.Sprintf("Usage for %s", item.SKU),
+			ResourceName:   item.SKU,
+			Id:             string(uuid.NewUUID()),
+			ProviderId:     fmt.Sprintf("%s %s %s", item.GroupId, item.ClusterName, item.SKU),
+			BilledCost:     float32(item.TotalPriceCents / 100),
+			ListCost:       item.Quantity * item.UnitPriceDollars,
+			ListUnitPrice:  item.UnitPriceDollars,
+			UsageQuantity:  item.Quantity,
+			UsageUnit:      item.Unit,
+		}
+
+		log.Debugf("Line Item %s %s", startDate.UTC(), endDate.UTC())
 		// Check if the item's StartDate >= win.start and EndDate <= win.end
-		if (win.start == nil || !startDate.Before(*win.start)) && (win.end == nil || !endDate.After(*win.end)) {
-			filteredItems = append(filteredItems, item)
+		if (startDate.UTC().After(winStartUTC) || startDate.UTC().Equal(winStartUTC)) &&
+			(endDate.UTC().Before(winEndUTC) || endDate.UTC().Equal(winEndUTC)) {
+			// 	// Append the customCost pointer to the slice
+			filteredItems = append(filteredItems, customCost)
 		}
 	}
 
 	return filteredItems
+
 }
 
-func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window, lineItems []*pb.CustomCost) (*pb.CustomCostResponse, error) {
+func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window, lineItems []atlasplugin.LineItem) (*pb.CustomCostResponse, error) {
 
 	//filter responses between
+
 	costsInWindow := filterLineItemsByWindow(win, lineItems)
 
 	resp := pb.CustomCostResponse{
@@ -205,7 +234,7 @@ func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window, lineItems
 	return &resp, nil
 }
 
-func GetPendingInvoices(org string, client HTTPClient) ([]*pb.CustomCost, error) {
+func GetPendingInvoices(org string, client HTTPClient) ([]atlasplugin.LineItem, error) {
 	request, _ := http.NewRequest("GET", fmt.Sprintf(costExplorerPendingInvoices, org), nil)
 
 	request.Header.Set("Accept", "application/vnd.atlas.2023-01-01+json")
@@ -229,17 +258,6 @@ func GetPendingInvoices(org string, client HTTPClient) ([]*pb.CustomCost, error)
 		log.Errorf(msg)
 		return nil, fmt.Errorf(msg)
 	}
-	var costs []*pb.CustomCost
-	// Iterate over the UsageDetails in CostResponse
-	for _, lineItem := range pendingInvoicesResponse.LineItems {
-		// Create a new pb.CustomCost for each LineItem
-		log.Debugf("Line item %v", lineItem)
-		customCost := &pb.CustomCost{
-			//TODO get mapping
-		}
 
-		// Append the customCost pointer to the slice
-		costs = append(costs, customCost)
-	}
-	return costs, nil
+	return pendingInvoicesResponse.LineItems, nil
 }
