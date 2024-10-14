@@ -194,7 +194,7 @@ func filterLineItemsByWindow(win *opencost.Window, lineItems []atlasplugin.LineI
 			ResourceName:   item.SKU,
 			Id:             string(uuid.NewUUID()),
 			ProviderId:     fmt.Sprintf("%s %s %s", item.GroupId, item.ClusterName, item.SKU),
-			BilledCost:     float32(item.TotalPriceCents / 100),
+			BilledCost:     float32(item.TotalPriceCents) / 100.0,
 			ListCost:       item.Quantity * item.UnitPriceDollars,
 			ListUnitPrice:  item.UnitPriceDollars,
 			UsageQuantity:  item.Quantity,
