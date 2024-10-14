@@ -407,8 +407,9 @@ func TestFilterInvoicesOnWindow(t *testing.T) {
 	assert.Equal(t, "0", filteredItems[0].ResourceName)
 	assert.NotNil(t, filteredItems[0].Id)
 	assert.NotNil(t, filteredItems[0].ProviderId)
+	assert.Equal(t, "A/cluster-0/0", filteredItems[0].ProviderId)
 
-	assert.InDelta(t, lineItems[0].TotalPriceCents/100, filteredItems[0].BilledCost, 0.01)
+	assert.InDelta(t, float32(lineItems[0].TotalPriceCents)/100.0, filteredItems[0].BilledCost, 0.01)
 	assert.InDelta(t, filteredItems[0].ListCost, lineItems[0].Quantity*lineItems[0].UnitPriceDollars, 0.01)
 	assert.Equal(t, lineItems[0].Quantity, filteredItems[0].UsageQuantity)
 	assert.Equal(t, filteredItems[0].UsageUnit, lineItems[0].Unit)
