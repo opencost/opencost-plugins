@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/icholy/digest"
 	atlasplugin "github.com/opencost/opencost-plugins/pkg/plugins/mongodb-atlas/plugin"
 	"github.com/opencost/opencost/core/pkg/model/pb"
 	"github.com/opencost/opencost/core/pkg/opencost"
@@ -33,37 +35,47 @@ func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 // mapuk = public key for mongodb atlas
 // maprk  = private key for mongodb atlas
 // maOrgId = orgId to be testsed
-// func TestMain(t *testing.T) {
+func TestMain(t *testing.T) {
 
-// 	publicKey := os.Getenv("mapuk")
-// 	privateKey := os.Getenv("maprk")
-// 	orgId := os.Getenv("maorgid")
-// 	if publicKey == "" || privateKey == "" || orgId == "" {
-// 		t.Skip("Skipping integration test.")
-// 	}
+	publicKey := os.Getenv("mapuk")
+	privateKey := os.Getenv("maprk")
+	orgId := os.Getenv("maorgid")
+	if publicKey == "" || privateKey == "" || orgId == "" {
+		t.Skip("Skipping integration test.")
+	}
 
-// 	assert.NotNil(t, publicKey)
-// 	assert.NotNil(t, privateKey)
-// 	assert.NotNil(t, orgId)
+	assert.NotNil(t, publicKey)
+	assert.NotNil(t, privateKey)
+	assert.NotNil(t, orgId)
 
-// 	client := &http.Client{
-// 		Transport: &digest.Transport{
-// 			Username: publicKey,
-// 			Password: privateKey,
-// 		},
-// 	}
+	client := &http.Client{
+		Transport: &digest.Transport{
 
-// 	// Define the layout that matches the format of the date string
-// 	layout := "2006-01-02"
-// 	endTime, _ := time.Parse(layout, "2024-07-01")
-// 	startTime, _ := time.Parse(layout, "2023-12-01")
-// 	url := "https://cloud.mongodb.com/api/atlas/v2/orgs/" + orgId + "/billing/costExplorer/usage"
-// 	resp, err := createCostExplorerQueryToken(orgId, startTime, endTime, client)
+			Username: publicKey,
+			Password: privateKey,
+		},
+	}
 
-// 	assert.NotEmpty(t, resp)
-// 	assert.Nil(t, err)
+	atlasCostSource := AtlasCostSource{
+		orgID:       "myOrg",
+		atlasClient: client,
+	}
+	// Define the start and end time for the window
+	now := time.Now()
+	currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 
-// }
+	customCostRequest := pb.CustomCostRequest{
+		Start:      timestamppb.New(currentMonthStart),                     // Start in current month
+		End:        timestamppb.New(currentMonthStart.Add(24 * time.Hour)), // End in current month
+		Resolution: durationpb.New(24 * time.Hour),                         // 1 day resolution
+
+	}
+
+	resp := atlasCostSource.GetCustomCosts(&customCostRequest)
+
+	assert.NotEmpty(t, resp)
+
+}
 
 // tests for getCosts
 func TestGetCostsPendingInvoices(t *testing.T) {
