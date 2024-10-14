@@ -27,3 +27,40 @@ type Invoice struct {
 type CostResponse struct {
 	UsageDetails []Invoice `json:"usageDetails"`
 }
+
+type PendingInvoice struct {
+	AmountBilledCents    int32      `json:"amountBilledCents"`
+	AmountPaidCents      int32      `json:"amountPaidCents"`
+	Created              string     `json:"created"`
+	CreditsCents         int32      `json:"creditCents"`
+	Id                   string     `json:"id"`
+	EndDate              string     `json:"endDate"`
+	LineItems            []LineItem `json:"lineItems"`
+	Links                []Link     `json:"links"`
+	OrgId                string     `json:"orgId"`
+	SalesTaxCents        int32      `json:"salesTaxCents"`
+	StartDate            string     `json:"startDate"`
+	StartingBalanceCents int32      `json:"startingBalanceCents"`
+	StatusName           string     `json:"statusName"`
+	SubTotalCents        int32      `json:"subtotalCents"`
+	Updated              string     `json:"updated"`
+}
+
+type Link struct {
+	Href string `json:"href"`
+	Rel  string `json:"rel"`
+}
+
+type LineItem struct {
+	ClusterName      string  `json:"clusterName"`
+	Created          string  `json:"created"`
+	EndDate          string  `json:"endDate"`
+	GroupId          string  `json:"groupId"`
+	GroupName        string  `json:"groupName"`
+	Quantity         float32 `json:"quantity"`
+	SKU              string  `json:"sku"`
+	StartDate        string  `json:"startDate"`
+	TotalPriceCents  int32   `json:"totalPriceCents"`
+	Unit             string  `json:"unit"`
+	UnitPriceDollars float32 `json:"unitPriceDollars"`
+}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,8 +30,7 @@ var handshakeConfig = plugin.HandshakeConfig{
 	MagicCookieValue: "mongodb-atlas",
 }
 
-const costExplorerFmt = "https://cloud.mongodb.com/api/atlas/v2/orgs/%s/billing/costExplorer/usage"
-const costExplorerQueryFmt = "https://cloud.mongodb.com/api/atlas/v2/orgs/%s/billing/costExplorer/usage/%s"
+const costExplorerPendingInvoices = "https://cloud.mongodb.com/api/atlas/v2/orgs/%s/invoices/pending"
 
 func main() {
 	log.Debug("Initializing Mongo plugin")
@@ -90,8 +88,39 @@ type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
+func validateRequest(req *pb.CustomCostRequest) []string {
+	var errors []string
+	now := time.Now()
+	// 1. Check if resolution is less than a day
+	if req.Resolution.AsDuration() < 24*time.Hour {
+		errors = append(errors, "Resolution should be at least one day.")
+	}
+	// Get the start of the current month
+	currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+
+	// 2. Check if start time is before the start of the current month
+	if req.Start.AsTime().Before(currentMonthStart) {
+		errors = append(errors, "Start date cannot be before the current month. Historical costs not currently supported")
+	}
+
+	// 3. Check if end time is before the start of the current month
+	if req.End.AsTime().Before(currentMonthStart) {
+		errors = append(errors, "End date cannot be before the current month. Historical costs not currently supported")
+	}
+
+	return errors
+}
 func (a *AtlasCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.CustomCostResponse {
 	results := []*pb.CustomCostResponse{}
+
+	requestErrors := validateRequest(req)
+	if len(requestErrors) > 0 {
+		errResp := pb.CustomCostResponse{
+			Errors: requestErrors,
+		}
+		results = append(results, &errResp)
+		return results
+	}
 
 	targets, err := opencost.GetWindows(req.Start.AsTime(), req.End.AsTime(), req.Resolution.AsDuration())
 	if err != nil {
@@ -102,6 +131,16 @@ func (a *AtlasCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Custom
 		results = append(results, &errResp)
 		return results
 	}
+	costs, err := GetPendingInvoices(a.orgID, a.atlasClient)
+	if err != nil {
+		log.Errorf("Error fetching invoices: %v", err)
+		errResp := pb.CustomCostResponse{
+			Errors: []string{fmt.Sprintf("error fetching invoices: %v", err)},
+		}
+		results = append(results, &errResp)
+		return results
+
+	}
 
 	for _, target := range targets {
 		if target.Start().After(time.Now().UTC()) {
@@ -110,7 +149,7 @@ func (a *AtlasCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Custom
 		}
 
 		log.Debugf("fetching atlas costs for window %v", target)
-		result, err := a.getAtlasCostsForWindow(&target)
+		result, err := a.getAtlasCostsForWindow(&target, costs)
 		if err != nil {
 			log.Errorf("error getting costs for window %v: %v", target, err)
 			errResp := pb.CustomCostResponse{}
@@ -124,21 +163,33 @@ func (a *AtlasCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Custom
 	return results
 }
 
-func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window) (*pb.CustomCostResponse, error) {
+func filterLineItemsByWindow(win *opencost.Window, lineItems []*pb.CustomCost) []*pb.CustomCost {
+	var filteredItems []*pb.CustomCost
 
-	// get the token
-	token, err := CreateCostExplorerQueryToken(a.orgID, *win.Start(), *win.End(), a.atlasClient)
-	if err != nil {
-		log.Errorf("error getting token: %v", err)
-		return nil, err
+	// Iterate over each line item
+	for _, item := range lineItems {
+		// Parse StartDate and EndDate from strings to time.Time
+		startDate, err1 := time.Parse("2006-01-02", item.StartDate) // Assuming date format is YYYY-MM-DD
+		endDate, err2 := time.Parse("2006-01-02", item.EndDate)     // Same format assumption
+
+		if err1 != nil || err2 != nil {
+			// If parsing fails, skip this item
+			continue
+		}
+
+		// Check if the item's StartDate >= win.start and EndDate <= win.end
+		if (win.start == nil || !startDate.Before(*win.start)) && (win.end == nil || !endDate.After(*win.end)) {
+			filteredItems = append(filteredItems, item)
+		}
 	}
 
-	// get the costs
-	costs, err := GetCosts(a.atlasClient, a.orgID, token)
-	if err != nil {
-		log.Errorf("error getting costs: %v", err)
-		return nil, err
-	}
+	return filteredItems
+}
+
+func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window, lineItems []*pb.CustomCost) (*pb.CustomCostResponse, error) {
+
+	//filter responses between
+	costsInWindow := filterLineItemsByWindow(win, lineItems)
 
 	resp := pb.CustomCostResponse{
 		Metadata:   map[string]string{"api_client_version": "v1"},
@@ -149,105 +200,46 @@ func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window) (*pb.Cust
 		Start:      timestamppb.New(*win.Start()),
 		End:        timestamppb.New(*win.End()),
 		Errors:     []string{},
-		Costs:      costs,
+		Costs:      costsInWindow,
 	}
 	return &resp, nil
 }
 
-func GetCosts(client HTTPClient, org string, token string) ([]*pb.CustomCost, error) {
-	request, _ := http.NewRequest("GET", fmt.Sprintf(costExplorerQueryFmt, org, token), nil)
+func GetPendingInvoices(org string, client HTTPClient) ([]*pb.CustomCost, error) {
+	request, _ := http.NewRequest("GET", fmt.Sprintf(costExplorerPendingInvoices, org), nil)
 
 	request.Header.Set("Accept", "application/vnd.atlas.2023-01-01+json")
 	request.Header.Set("Content-Type", "application/vnd.atlas.2023-01-01+json")
 
 	response, error := client.Do(request)
-	statusCode := response.StatusCode
-	//102 status code means processing - so repeat call 2 times to see if we get a response
-	for count := 1; count < 2 && statusCode == http.StatusProcessing; count++ {
-		// Sleep for 5 seconds before the next request
-		time.Sleep(5 * time.Second)
-		response, _ := client.Do(request)
-		statusCode = response.StatusCode
-
-	}
-
-	if statusCode == http.StatusProcessing {
-		msg := "timeout waiting for response"
-		return nil, fmt.Errorf(msg)
-	}
 	if error != nil {
-		msg := fmt.Sprintf("getCostExplorerUsage: error from server: %v", error)
+		msg := fmt.Sprintf("getPending Invoices: error from server: %v", error)
 		log.Errorf(msg)
 		return nil, fmt.Errorf(msg)
 
 	}
+
 	defer response.Body.Close()
 	body, _ := io.ReadAll(response.Body)
 	log.Debugf("response Body: %s", string(body))
-	var costResponse atlasplugin.CostResponse
-	respUnmarshalError := json.Unmarshal([]byte(body), &costResponse)
+	var pendingInvoicesResponse atlasplugin.PendingInvoice
+	respUnmarshalError := json.Unmarshal([]byte(body), &pendingInvoicesResponse)
 	if respUnmarshalError != nil {
-		msg := fmt.Sprintf("getCost: error unmarshalling response: %v", respUnmarshalError)
+		msg := fmt.Sprintf("pendingInvoices: error unmarshalling response: %v", respUnmarshalError)
 		log.Errorf(msg)
 		return nil, fmt.Errorf(msg)
 	}
 	var costs []*pb.CustomCost
 	// Iterate over the UsageDetails in CostResponse
-	for _, invoice := range costResponse.UsageDetails {
-		// Create a new pb.CustomCost for each Invoice
+	for _, lineItem := range pendingInvoicesResponse.LineItems {
+		// Create a new pb.CustomCost for each LineItem
+		log.Debugf("Line item %v", lineItem)
 		customCost := &pb.CustomCost{
-			Id:             invoice.InvoiceId,
-			AccountName:    invoice.OrganizationName,
-			ChargeCategory: invoice.Service,
-			BilledCost:     invoice.UsageAmount,
+			//TODO get mapping
 		}
 
 		// Append the customCost pointer to the slice
 		costs = append(costs, customCost)
 	}
 	return costs, nil
-}
-
-// pass list of orgs , start date, end date
-func CreateCostExplorerQueryToken(org string, startDate time.Time, endDate time.Time,
-	client HTTPClient) (string, error) {
-	// Define the layout for the desired format
-	layout := "2006-01-02"
-
-	// Convert the time.Time object to a string in yyyy-mm-dd format
-	startDateString := startDate.Format(layout)
-	endDateString := endDate.Format(layout)
-
-	payload := atlasplugin.CreateCostExplorerQueryPayload{
-
-		EndDate:       endDateString,
-		StartDate:     startDateString,
-		Organizations: []string{org},
-	}
-	payloadJson, _ := json.Marshal(payload)
-
-	request, _ := http.NewRequest("POST", fmt.Sprintf(costExplorerFmt, org), bytes.NewBuffer(payloadJson))
-
-	request.Header.Set("Accept", "application/vnd.atlas.2023-01-01+json")
-	request.Header.Set("Content-Type", "application/vnd.atlas.2023-01-01+json")
-
-	response, error := client.Do(request)
-	if error != nil {
-		msg := fmt.Sprintf("createCostExplorerQueryToken: error from server: %v", error)
-		log.Errorf(msg)
-		return "", fmt.Errorf(msg)
-
-	}
-	defer response.Body.Close()
-
-	body, _ := io.ReadAll(response.Body)
-	log.Debugf("response Body: %s", string(body))
-	var createCostExplorerQueryResponse atlasplugin.CreateCostExplorerQueryResponse
-	respUnmarshalError := json.Unmarshal([]byte(body), &createCostExplorerQueryResponse)
-	if respUnmarshalError != nil {
-		msg := fmt.Sprintf("createCostExplorerQueryToken: error unmarshalling response: %v", respUnmarshalError)
-		log.Errorf(msg)
-		return "", fmt.Errorf(msg)
-	}
-	return createCostExplorerQueryResponse.Token, nil
 }

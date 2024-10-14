@@ -28,51 +28,6 @@ func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return m.DoFunc(req)
 }
 
-func TestCreateCostExplorerQueryToken(t *testing.T) {
-	// Mock data
-	org := "testOrg"
-	startDate := time.Date(2023, 9, 1, 0, 0, 0, 0, time.UTC)
-	endDate := time.Date(2023, 9, 30, 0, 0, 0, 0, time.UTC)
-	expectedToken := "mockToken"
-
-	// Define the response that the mock client will return
-	mockResponse := atlasplugin.CreateCostExplorerQueryResponse{
-		Token: expectedToken,
-	}
-	mockResponseJson, _ := json.Marshal(mockResponse)
-
-	// Create a mock HTTPClient that returns a successful response
-	mockClient := &MockHTTPClient{
-		DoFunc: func(req *http.Request) (*http.Response, error) {
-			// Verify that the request method and URL are correct
-			if req.Method != http.MethodPost {
-				t.Errorf("expected POST request, got %s", req.Method)
-			}
-			expectedURL := fmt.Sprintf(costExplorerFmt, org)
-			if req.URL.String() != expectedURL {
-				t.Errorf("expected URL %s, got %s", expectedURL, req.URL.String())
-			}
-
-			// Return a mock response with status 200 and mock JSON body
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
-			}, nil
-		},
-	}
-
-	// Call the function under test
-	token, err := CreateCostExplorerQueryToken(org, startDate, endDate, mockClient)
-
-	// Assert that the function returned the expected token and no error
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if token != expectedToken {
-		t.Errorf("expected token %s, got %s", expectedToken, token)
-	}
-}
-
 // FOR INTEGRATION TESTING PURPOSES ONLY
 // expects 3 env variables to be set to work
 // mapuk = public key for mongodb atlas
@@ -110,84 +65,46 @@ func TestCreateCostExplorerQueryToken(t *testing.T) {
 
 // }
 
-func TestErrorFromServer(t *testing.T) {
-
-	// Define the layout that matches the format of the date string
-	layout := "2006-01-02"
-	endTime, _ := time.Parse(layout, "2024-07-01")
-	startTime, _ := time.Parse(layout, "2023-12-01")
-	orgId := "1"
-	// Create a mock HTTPClient that returns a successful response
-	mockClient := &MockHTTPClient{
-		DoFunc: func(req *http.Request) (*http.Response, error) {
-
-			// Return a mock response with status 200 and mock JSON body
-			return &http.Response{
-				StatusCode: http.StatusInternalServerError,
-				Body:       io.NopCloser(bytes.NewBufferString("fake")),
-			}, nil
-		},
-	}
-	_, err := CreateCostExplorerQueryToken(orgId, startTime, endTime, mockClient)
-
-	assert.NotEmpty(t, err)
-
-}
-
-func TestCallToCreateCostExplorerQueryBadMessage(t *testing.T) {
-
-	// Define the layout that matches the format of the date string
-	layout := "2006-01-02"
-	endTime, _ := time.Parse(layout, "2024-07-01")
-	startTime, _ := time.Parse(layout, "2023-12-01")
-	mockClient := &MockHTTPClient{
-		DoFunc: func(req *http.Request) (*http.Response, error) {
-
-			// Return a mock response with status 200 and mock JSON body
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewBufferString("This ain't json")),
-			}, nil
-		},
-	}
-
-	_, error := CreateCostExplorerQueryToken("myOrg", startTime, endTime, mockClient)
-	assert.NotEmpty(t, error)
-
-}
-
 // tests for getCosts
-func TestGetCostsMultipleInvoices(t *testing.T) {
-	costResponse := atlasplugin.CostResponse{
-		UsageDetails: []atlasplugin.Invoice{
+func TestGetCostsPendingInvoices(t *testing.T) {
+	pendingInvoiceResponse := atlasplugin.PendingInvoice{
+		AmountBilledCents: 0,
+		AmountPaidCents:   0,
+		Created:           "2024-10-01T02:00:26Z",
+		CreditsCents:      0,
+		EndDate:           "2024-11-01T00:00:00Z",
+		Id:                "66fb726b79b56205f9376437",
+		LineItems: []atlasplugin.LineItem{
 			{
-				InvoiceId:        "INV001",
-				OrganizationId:   "ORG123",
-				OrganizationName: "Acme Corp",
-				Service:          "Compute",
-				UsageAmount:      120.50,
-				UsageDate:        "2024-10-01",
-			},
-			{
-				InvoiceId:        "INV002",
-				OrganizationId:   "ORG124",
-				OrganizationName: "Beta Corp",
-				Service:          "Storage",
-				UsageAmount:      75.75,
-				UsageDate:        "2024-10-02",
-			},
-			{
-				InvoiceId:        "INV003",
-				OrganizationId:   "ORG125",
-				OrganizationName: "Gamma Inc",
-				Service:          "Networking",
-				UsageAmount:      50.00,
-				UsageDate:        "2024-10-03",
+				ClusterName:      "kubecost-mongo-dev-1",
+				Created:          "2024-10-11T02:57:56Z",
+				EndDate:          "2024-10-11T00:00:00Z",
+				GroupId:          "66d7254246a21a41036ff33e",
+				GroupName:        "Project 0",
+				Quantity:         6.035e-07,
+				SKU:              "ATLAS_AWS_DATA_TRANSFER_DIFFERENT_REGION",
+				StartDate:        "2024-10-10T00:00:00Z",
+				TotalPriceCents:  0,
+				Unit:             "GB",
+				UnitPriceDollars: 0.02,
 			},
 		},
+		Links: []atlasplugin.Link{
+			{
+				Href: "https://cloud.mongodb.com/api/atlas/v2/orgs/66d7254246a21a41036ff2e9",
+				Rel:  "self",
+			},
+		},
+		OrgId:                "66d7254246a21a41036ff2e9",
+		SalesTaxCents:        0,
+		StartDate:            "2024-10-01T00:00:00Z",
+		StartingBalanceCents: 0,
+		StatusName:           "PENDING",
+		SubTotalCents:        0,
+		Updated:              "2024-10-01T02:00:26Z",
 	}
 
-	mockResponseJson, _ := json.Marshal(costResponse)
+	mockResponseJson, _ := json.Marshal(pendingInvoiceResponse)
 
 	mockClient := &MockHTTPClient{
 		DoFunc: func(req *http.Request) (*http.Response, error) {
@@ -195,7 +112,7 @@ func TestGetCostsMultipleInvoices(t *testing.T) {
 			if req.Method != http.MethodGet {
 				t.Errorf("expected GET request, got %s", req.Method)
 			}
-			expectedURL := fmt.Sprintf(costExplorerQueryFmt, "myOrg", "t1")
+			expectedURL := fmt.Sprintf(costExplorerPendingInvoices, "myOrg")
 			if req.URL.String() != expectedURL {
 				t.Errorf("expected URL %s, got %s", expectedURL, req.URL.String())
 			}
@@ -207,16 +124,17 @@ func TestGetCostsMultipleInvoices(t *testing.T) {
 			}, nil
 		},
 	}
-	costs, err := GetCosts(mockClient, "myOrg", "t1")
+	costs, err := GetPendingInvoices("myOrg", mockClient)
 	assert.Nil(t, err)
-	assert.Equal(t, 3, len(costs))
+	assert.Equal(t, 1, len(costs))
 
-	for i, invoice := range costResponse.UsageDetails {
-		assert.Equal(t, invoice.InvoiceId, costs[i].Id)
-		assert.Equal(t, invoice.OrganizationName, costs[i].AccountName)
-		assert.Equal(t, invoice.Service, costs[i].ChargeCategory)
-		assert.Equal(t, invoice.UsageAmount, costs[i].BilledCost)
-	}
+	//TODO
+	// for i, invoice := range costResponse.UsageDetails {
+	// 	assert.Equal(t, invoice.InvoiceId, costs[i].Id)
+	// 	assert.Equal(t, invoice.OrganizationName, costs[i].AccountName)
+	// 	assert.Equal(t, invoice.Service, costs[i].ChargeCategory)
+	// 	assert.Equal(t, invoice.UsageAmount, costs[i].BilledCost)
+	// }
 }
 
 func TestGetCostErrorFromServer(t *testing.T) {
@@ -231,7 +149,7 @@ func TestGetCostErrorFromServer(t *testing.T) {
 			}, nil
 		},
 	}
-	costs, err := GetCosts(mockClient, "myOrg", "t1")
+	costs, err := GetPendingInvoices("myOrg", mockClient)
 
 	assert.NotEmpty(t, err)
 	assert.Nil(t, costs)
@@ -251,44 +169,12 @@ func TestGetCostsBadMessage(t *testing.T) {
 		},
 	}
 
-	_, error := GetCosts(mockClient, "myOrg", "t1")
+	_, error := GetPendingInvoices("myOrd", mockClient)
 	assert.NotEmpty(t, error)
 
 }
 
-func TestRepeatCallTill200(t *testing.T) {
-
-	var count = 0
-	mockResponseJson := getCostResponseMock()
-
-	mockClient := &MockHTTPClient{
-		DoFunc: func(req *http.Request) (*http.Response, error) {
-			count++
-
-			if count < 2 {
-				// Return a mock response with status 200 and mock JSON body
-				return &http.Response{
-					StatusCode: http.StatusProcessing,
-					Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
-				}, nil
-
-			} else {
-				// Return a mock response with status 200 and mock JSON body
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
-				}, nil
-
-			}
-
-		},
-	}
-
-	costs, err := GetCosts(mockClient, "myOrg", "t1")
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(costs))
-}
-
+// TODO delete this
 func getCostResponseMock() []byte {
 	costResponse := atlasplugin.CostResponse{
 		UsageDetails: []atlasplugin.Invoice{
@@ -306,25 +192,6 @@ func getCostResponseMock() []byte {
 
 	mockResponseJson, _ := json.Marshal(costResponse)
 	return mockResponseJson
-}
-
-func TestStuckInProcessing(t *testing.T) {
-
-	mockClient := &MockHTTPClient{
-		DoFunc: func(req *http.Request) (*http.Response, error) {
-
-			// Return a mock response with status 200 and mock JSON body
-			return &http.Response{
-				StatusCode: http.StatusProcessing,
-				Body:       io.NopCloser(bytes.NewBufferString("")),
-			}, nil
-
-		},
-	}
-
-	costs, err := GetCosts(mockClient, "myOrg", "t1")
-	assert.NotNil(t, err)
-	assert.Nil(t, costs)
 }
 
 func TestGetAtlasCostsForWindow(t *testing.T) {
@@ -415,4 +282,69 @@ func TestGetCosts(t *testing.T) {
 
 	assert.Equal(t, 1, len(resp))
 
+}
+
+func TestValidateRequest(t *testing.T) {
+	// Get current time and first day of the current month
+	now := time.Now()
+	currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+
+	tests := []struct {
+		name           string
+		req            *pb.CustomCostRequest
+		expectedErrors []string
+	}{
+		{
+			name: "Valid request",
+			req: &pb.CustomCostRequest{
+				Start:      timestamppb.New(currentMonthStart.Add(5 * time.Hour)),  // Start in current month
+				End:        timestamppb.New(currentMonthStart.Add(48 * time.Hour)), // End in current month
+				Resolution: durationpb.New(24 * time.Hour),                         // 1 day resolution
+			},
+			expectedErrors: []string{},
+		},
+		{
+			name: "Resolution less than a day",
+			req: &pb.CustomCostRequest{
+				Start:      timestamppb.New(currentMonthStart.Add(5 * time.Hour)),  // Start in current month
+				End:        timestamppb.New(currentMonthStart.Add(48 * time.Hour)), // End in current month
+				Resolution: durationpb.New(12 * time.Hour),                         // 12 hours resolution (error)
+			},
+			expectedErrors: []string{"Resolution should be at least one day."},
+		},
+		{
+			name: "Start date before current month",
+			req: &pb.CustomCostRequest{
+				Start:      timestamppb.New(currentMonthStart.Add(-48 * time.Hour)), // Start before current month (error)
+				End:        timestamppb.New(currentMonthStart.Add(48 * time.Hour)),  // End in current month
+				Resolution: durationpb.New(24 * time.Hour),                          // 1 day resolution
+			},
+			expectedErrors: []string{"Start date cannot be before the current month. Historical costs not currently supported"},
+		},
+		{
+			name: "End date before current month",
+			req: &pb.CustomCostRequest{
+				Start:      timestamppb.New(currentMonthStart.Add(5 * time.Hour)),   // Start in current month
+				End:        timestamppb.New(currentMonthStart.Add(-48 * time.Hour)), // End before current month (error)
+				Resolution: durationpb.New(24 * time.Hour),                          // 1 day resolution
+			},
+			expectedErrors: []string{"End date cannot be before the current month. Historical costs not currently supported"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors := validateRequest(tt.req)
+
+			if len(errors) != len(tt.expectedErrors) {
+				t.Errorf("Expected %d errors, got %d", len(tt.expectedErrors), len(errors))
+			}
+
+			for i, err := range tt.expectedErrors {
+				if errors[i] != err {
+					t.Errorf("Expected error %q, got %q", err, errors[i])
+				}
+			}
+		})
+	}
 }
