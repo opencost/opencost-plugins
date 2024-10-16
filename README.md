@@ -67,9 +67,9 @@ Now that your plugin is implemented and tested, all that's left is to get it sub
 - Many cost sources have API rate limits, such as Datadog. As such, a rate limiter may be necessary.
 - If you want a plugin embedded in your OpenCost image, you will have to build the image yourself.
 
-### Contributors
+## Contributors
 
-Thanks to all the individuals who have given their time and effort towards creating and maintaining this repo:
+Thanks to all the individuals who have given their time and effort towards creating and maintaining these plugins:
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <!-- prettier-ignore-start -->
