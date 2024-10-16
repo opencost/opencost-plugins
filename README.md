@@ -66,3 +66,21 @@ Now that your plugin is implemented and tested, all that's left is to get it sub
 - OpenCost stores the plugin responses in an in-memory repository, which necessitates that OpenCost queries the plugins again for cost data upon pod restart.
 - Many cost sources have API rate limits, such as Datadog. As such, a rate limiter may be necessary.
 - If you want a plugin embedded in your OpenCost image, you will have to build the image yourself.
+
+## Contributors
+
+Thanks to all the individuals who have given their time and effort towards creating and maintaining these plugins:
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tr>
+    <td align="center"><a href="https://github.com/sajit"><img src="https://avatars.githubusercontent.com/u/675316?v=4?s=100" width="100px;" alt=""/><br /><sub><b>Sajit Mathew Kunnumkal</b></sub></a><br /><a href="https://github.com/opencost/opencost-plugins/commits?author=sajit" title="Code">💻</a><br /><sub><b>MongoDB Atlas Plugin</b></sub></a><br /</td>
+  </tr>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->
