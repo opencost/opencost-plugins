@@ -124,7 +124,7 @@ func TestGetCostsPendingInvoices(t *testing.T) {
 			if req.Method != http.MethodGet {
 				t.Errorf("expected GET request, got %s", req.Method)
 			}
-			expectedURL := fmt.Sprintf(costExplorerPendingInvoices, "myOrg")
+			expectedURL := fmt.Sprintf(costExplorerPendingInvoicesURL, "myOrg")
 			if req.URL.String() != expectedURL {
 				t.Errorf("expected URL %s, got %s", expectedURL, req.URL.String())
 			}
@@ -154,10 +154,7 @@ func TestGetCostErrorFromServer(t *testing.T) {
 		DoFunc: func(req *http.Request) (*http.Response, error) {
 
 			// Return a mock response with status 200 and mock JSON body
-			return &http.Response{
-				StatusCode: http.StatusInternalServerError,
-				Body:       io.NopCloser(bytes.NewBufferString("")),
-			}, nil
+			return nil, fmt.Errorf("mock error: failed to execute request")
 		},
 	}
 	costs, err := GetPendingInvoices("myOrg", mockClient)
@@ -226,8 +223,7 @@ func TestGetAtlasCostsForWindow(t *testing.T) {
 
 	// Create a new Window instance
 	window := opencost.NewWindow(&day2, &day3)
-	resp, error := atlasCostSource.getAtlasCostsForWindow(&window, lineItems)
-	assert.Nil(t, error)
+	resp := atlasCostSource.getAtlasCostsForWindow(&window, lineItems)
 	assert.True(t, resp != nil)
 	assert.Equal(t, "data_storage", resp.CostSource)
 	assert.Equal(t, "mongodb-atlas", resp.Domain)
@@ -413,4 +409,83 @@ func TestFilterInvoicesOnWindow(t *testing.T) {
 	assert.InDelta(t, filteredItems[0].ListCost, lineItems[0].Quantity*lineItems[0].UnitPriceDollars, 0.01)
 	assert.Equal(t, lineItems[0].Quantity, filteredItems[0].UsageQuantity)
 	assert.Equal(t, filteredItems[0].UsageUnit, lineItems[0].Unit)
+}
+
+func TestFilterInvoicesOnWindowBadResponse(t *testing.T) {
+	//setup a window between october 1st and october 31st 2024
+	windowStart := time.Date(2024, time.October, 1, 0, 0, 0, 0, time.UTC)
+	windowEnd := time.Date(2024, time.October, 31, 0, 0, 0, 0, time.UTC)
+	window := opencost.NewWindow(&windowStart, &windowEnd)
+
+	//lineItems has bad startdate and bad endDate
+	lineItems := []atlasplugin.LineItem{
+		{StartDate: "Bar", EndDate: "Foo", UnitPriceDollars: 1.0, GroupName: "kubecost0",
+			SKU: "0", ClusterName: "cluster-0", GroupId: "A", TotalPriceCents: 45, Quantity: 2, Unit: "GB"}, // Within window
+		// Partially in window
+	}
+
+	filteredItems := filterLineItemsByWindow(&window, lineItems)
+	assert.Equal(t, 0, len(filteredItems))
+}
+
+func TestBadWindow(t *testing.T) {
+	pendingInvoiceResponse := atlasplugin.PendingInvoice{}
+
+	mockResponseJson, _ := json.Marshal(pendingInvoiceResponse)
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+
+			//return costs
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBuffer(mockResponseJson)),
+			}, nil
+
+		},
+	}
+	atlasCostSource := AtlasCostSource{
+		orgID:       "myOrg",
+		atlasClient: mockClient,
+	}
+	now := time.Now()
+	currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	customCostRequest := pb.CustomCostRequest{
+		Start:      timestamppb.New(currentMonthStart),                    // Start in current month
+		End:        timestamppb.New(currentMonthStart.Add(5 * time.Hour)), // End in 5 hours
+		Resolution: durationpb.New(24 * time.Hour),                        // 1 day resolution
+
+	}
+	//this window should throw an error in the opencost.GetWindows method
+	resp := atlasCostSource.GetCustomCosts(&customCostRequest)
+	assert.True(t, len(resp[0].Errors) > 0)
+}
+
+func TestGetCostsReturnsErrorForPendingInvoices(t *testing.T) {
+
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+
+			//return costs
+			return nil, fmt.Errorf("mock error: failed to execute request")
+
+		},
+	}
+	atlasCostSource := AtlasCostSource{
+		orgID:       "myOrg",
+		atlasClient: mockClient,
+	}
+	// Define the start and end time for the window
+	now := time.Now()
+	currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	customCostRequest := pb.CustomCostRequest{
+		Start:      timestamppb.New(currentMonthStart),                     // Start in current month
+		End:        timestamppb.New(currentMonthStart.Add(48 * time.Hour)), // End in current month
+		Resolution: durationpb.New(24 * time.Hour),                         // 1 day resolution
+
+	}
+
+	resp := atlasCostSource.GetCustomCosts(&customCostRequest)
+	assert.True(t, len(resp[0].Errors) > 0)
+
 }

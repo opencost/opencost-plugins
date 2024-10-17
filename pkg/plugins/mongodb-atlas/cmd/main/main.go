@@ -31,7 +31,7 @@ var handshakeConfig = plugin.HandshakeConfig{
 	MagicCookieValue: "mongodb-atlas",
 }
 
-const costExplorerPendingInvoices = "https://cloud.mongodb.com/api/atlas/v2/orgs/%s/invoices/pending"
+const costExplorerPendingInvoicesURL = "https://cloud.mongodb.com/api/atlas/v2/orgs/%s/invoices/pending"
 
 func main() {
 	log.Debug("Initializing Mongo plugin")
@@ -155,15 +155,10 @@ func (a *AtlasCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Custom
 		}
 
 		log.Debugf("fetching atlas costs for window %v", target)
-		result, err := a.getAtlasCostsForWindow(&target, lineItems)
-		if err != nil {
-			log.Errorf("error getting costs for window %v: %v", target, err)
-			errResp := pb.CustomCostResponse{}
-			errResp.Errors = append(errResp.Errors, fmt.Sprintf("error getting costs for window %v: %v", target, err))
-			results = append(results, &errResp)
-		} else {
-			results = append(results, result)
-		}
+		result := a.getAtlasCostsForWindow(&target, lineItems)
+
+		results = append(results, result)
+
 	}
 
 	return results
@@ -183,12 +178,15 @@ func filterLineItemsByWindow(win *opencost.Window, lineItems []atlasplugin.LineI
 
 		if err1 != nil || err2 != nil {
 			// If parsing fails, skip this item
+			if err1 != nil {
+				log.Warnf("%s", err1)
+			}
+			if err2 != nil {
+				log.Warnf("%s", err2)
+			}
 			continue
 		}
-		// 	// Iterate over the UsageDetails in CostResponse
-		// for _, lineItem := range pendingInvoicesResponse.LineItems {
-		// Create a new pb.CustomCost for each LineItem
-		//log.Debugf("Line item %v", item)
+
 		customCost := &pb.CustomCost{
 
 			AccountName:    item.GroupName,
@@ -217,9 +215,9 @@ func filterLineItemsByWindow(win *opencost.Window, lineItems []atlasplugin.LineI
 
 }
 
-func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window, lineItems []atlasplugin.LineItem) (*pb.CustomCostResponse, error) {
+func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window, lineItems []atlasplugin.LineItem) *pb.CustomCostResponse {
 
-	//filter responses between
+	//filter responses between the win start and win end dates
 
 	costsInWindow := filterLineItemsByWindow(win, lineItems)
 
@@ -234,11 +232,11 @@ func (a *AtlasCostSource) getAtlasCostsForWindow(win *opencost.Window, lineItems
 		Errors:     []string{},
 		Costs:      costsInWindow,
 	}
-	return &resp, nil
+	return &resp
 }
 
 func GetPendingInvoices(org string, client HTTPClient) ([]atlasplugin.LineItem, error) {
-	request, _ := http.NewRequest("GET", fmt.Sprintf(costExplorerPendingInvoices, org), nil)
+	request, _ := http.NewRequest("GET", fmt.Sprintf(costExplorerPendingInvoicesURL, org), nil)
 
 	request.Header.Set("Accept", "application/vnd.atlas.2023-01-01+json")
 	request.Header.Set("Content-Type", "application/vnd.atlas.2023-01-01+json")
