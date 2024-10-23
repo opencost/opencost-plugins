@@ -338,11 +338,11 @@ func postProcess(ccResp *pb.CustomCostResponse) {
 
 	ccResp.Costs = processLogUsage(ccResp.Costs)
 
-	// removes any items that have 0 usage, either because of post processing or otherwise
-	ccResp.Costs = removeZeroUsages(ccResp.Costs)
-
 	// DBM queries have 200 * number of hosts included. We need to adjust the costs to reflect this
 	ccResp.Costs = adjustDBMQueries(ccResp.Costs)
+
+	// removes any items that have 0 usage, either because of post processing or otherwise
+	ccResp.Costs = removeZeroUsages(ccResp.Costs)
 }
 
 // as per https://www.datadoghq.com/pricing/?product=database-monitoring#database-monitoring-can-i-still-use-dbm-if-i-have-additional-normalized-queries-past-the-a-hrefpricingallotmentsallotteda-amount
@@ -383,7 +383,7 @@ func adjustDBMQueries(costs []*pb.CustomCost) []*pb.CustomCost {
 	return costs
 }
 
-// removes any items that have 0 usage, either because of post processing or otherwise
+// removes any items that have 0 usage or cost, either because of post processing or otherwise
 func removeZeroUsages(costs []*pb.CustomCost) []*pb.CustomCost {
 	for index := 0; index < len(costs); index++ {
 		if costs[index].UsageQuantity < 0.001 {
@@ -392,6 +392,15 @@ func removeZeroUsages(costs []*pb.CustomCost) []*pb.CustomCost {
 			index = 0
 		}
 	}
+
+	for index := 0; index < len(costs); index++ {
+		if costs[index].ListCost == 0.0 && costs[index].BilledCost == 0.0 {
+			log.Debugf("removing cost %s because it has 0 billed and list costs", costs[index].ProviderId)
+			costs = append(costs[:index], costs[index+1:]...)
+			index = 0
+		}
+	}
+
 	return costs
 }
 

@@ -77,8 +77,8 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 		return false
 	}
 
-	if len(respHourly) == 0 {
-		log.Errorf("no hourly response received from mongodb-atlas plugin")
+	if len(respHourly) != 0 {
+		log.Errorf("mongo plugin does not support hourly costs")
 		return false
 	}
 
