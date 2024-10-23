@@ -219,7 +219,7 @@ func (d *OpenAICostSource) getOpenAIBilling(start time.Time, end time.Time) (*op
 		req, errReq = http.NewRequest("GET", openAIBillingURL, nil)
 		if errReq != nil {
 			log.Warnf("error creating billing export request: %v", errReq)
-			log.Warnf("retrying request after 30s")
+			log.Infof("retrying request after 30s")
 			time.Sleep(30 * time.Second)
 			continue
 		}
@@ -246,7 +246,7 @@ func (d *OpenAICostSource) getOpenAIBilling(start time.Time, end time.Time) (*op
 
 			errReq = fmt.Errorf("received non-200 response for billing export request: %d", resp.StatusCode)
 			log.Warnf("got non-200 response for billing export request: %d, body is: %s", resp.StatusCode, bodyString)
-			log.Warnf("retrying request after 30s")
+			log.Infof("retrying request after 30s")
 			time.Sleep(30 * time.Second)
 			continue
 		} else {
@@ -304,7 +304,7 @@ func (d *OpenAICostSource) getOpenAITokenUsages(targetTime time.Time) (*openaipl
 		resp, errReq = client.Do(req)
 		if errReq != nil {
 			log.Warnf("error doing token request: %v", errReq)
-			log.Warnf("retrying request after 30s")
+			log.Infof("retrying request after 30s")
 			time.Sleep(30 * time.Second)
 			continue
 		}
@@ -320,7 +320,7 @@ func (d *OpenAICostSource) getOpenAITokenUsages(targetTime time.Time) (*openaipl
 				bodyString = string(bodyBytes)
 			}
 			log.Warnf("got non-200 response for token usage request: %d, body is: %s", resp.StatusCode, bodyString)
-			log.Warnf("retrying request after 30s")
+			log.Infof("retrying request after 30s")
 			time.Sleep(30 * time.Second)
 			continue
 		} else {

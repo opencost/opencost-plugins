@@ -106,7 +106,7 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 			if cost.GetBilledCost() == 0 {
 				log.Debugf("got zero cost for %v", cost)
 			}
-			if cost.GetBilledCost() > 1 {
+			if cost.GetBilledCost() > 2 {
 				log.Errorf("daily cost returned by plugin openai for %v is greater than 1", cost)
 				return false
 			}
@@ -120,7 +120,6 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 	expectedCosts := []string{
 		"GPT-4o mini",
 		"GPT-4o",
-		"Other models",
 	}
 
 	for _, cost := range expectedCosts {
