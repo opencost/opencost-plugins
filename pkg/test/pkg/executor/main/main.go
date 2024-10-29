@@ -41,6 +41,10 @@ func main() {
 			// for each plugin given via a flag
 			for _, plugin := range plugins {
 				log.Infof("Testing plugin: %s", plugin)
+				plugin = strings.TrimSpace(plugin)
+				if plugin == "" {
+					continue
+				}
 
 				// write the config in PLUGIN_NAME_CONFIG out to a file
 				envVarName := fmt.Sprintf("%s_CONFIG", strings.ReplaceAll(strings.ToUpper(plugin), "-", "_"))
