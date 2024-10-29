@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -14,17 +12,6 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-func TestPricingFetch(t *testing.T) {
-	listPricing, err := scrapeDatadogPrices(url)
-	if err != nil {
-		t.Fatalf("failed to get pricing: %v", err)
-	}
-	fmt.Printf("got response: %v", listPricing)
-	if len(listPricing.Details) == 0 {
-		t.Fatalf("expected non zero pricing details")
-	}
-}
 
 func TestGetCustomCosts(t *testing.T) {
 	// read necessary env vars. If any are missing, log warning and skip test
@@ -61,10 +48,10 @@ func TestGetCustomCosts(t *testing.T) {
 	ddCostSrc := DatadogCostSource{
 		rateLimiter: rateLimiter,
 	}
-	ddCostSrc.ddCtx, ddCostSrc.usageApi = getDatadogClients(config)
-	windowStart := time.Date(2024, 10, 6, 0, 0, 0, 0, time.UTC)
+	ddCostSrc.ddCtx, ddCostSrc.usageApi, ddCostSrc.v1UsageApi = getDatadogClients(config)
+	windowStart := time.Date(2024, 10, 16, 0, 0, 0, 0, time.UTC)
 	// query for qty 2 of 1 hour windows
-	windowEnd := time.Date(2024, 10, 7, 0, 0, 0, 0, time.UTC)
+	windowEnd := time.Date(2024, 10, 17, 0, 0, 0, 0, time.UTC)
 
 	req := &pb.CustomCostRequest{
 		Start:      timestamppb.New(windowStart),
@@ -72,7 +59,7 @@ func TestGetCustomCosts(t *testing.T) {
 		Resolution: durationpb.New(timeutil.Day),
 	}
 
-	log.SetLogLevel("debug")
+	log.SetLogLevel("trace")
 	resp := ddCostSrc.GetCustomCosts(req)
 
 	if len(resp) == 0 {

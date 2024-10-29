@@ -104,6 +104,7 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 	}
 
 	dbmCostsInRange := 0
+	seenCosts := map[string]bool{}
 	//verify that the returned costs are non zero
 	for _, resp := range respDaily {
 		if len(resp.Costs) == 0 && resp.Start.AsTime().After(time.Now().Truncate(24*time.Hour).Add(-1*time.Minute)) {
@@ -112,12 +113,12 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 		}
 		var costSum float32
 		for _, cost := range resp.Costs {
-			costSum += cost.GetListCost()
-
-			if cost.GetListCost() == 0 {
+			costSum += cost.GetBilledCost()
+			seenCosts[cost.GetResourceName()] = true
+			if cost.GetBilledCost() == 0 {
 				log.Debugf("got zero cost for %v", cost)
 			}
-			if cost.GetListCost() > 100 {
+			if cost.GetBilledCost() > 100 {
 				log.Errorf("daily cost returned by plugin datadog for %v is greater than 100", cost)
 				return false
 			}
@@ -126,7 +127,7 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 			// range
 			if cost.GetResourceName() == "dbm_host_count" {
 				// filter out recent costs since those might not be full days worth
-				if cost.GetListCost() > 2.5 && cost.GetListCost() < 3.0 {
+				if cost.GetBilledCost() > 2.5 && cost.GetBilledCost() < 3.0 {
 					dbmCostsInRange++
 				}
 			}
@@ -143,41 +144,26 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 		return false
 	}
 
-	seenCosts := map[string]bool{}
-	for _, resp := range respHourly {
-		var costSum float32
-		for _, cost := range resp.Costs {
-			seenCosts[cost.GetResourceName()] = true
-			costSum += cost.GetListCost()
-		}
-		if costSum == 0 {
-			log.Errorf("hourly cost returned by plugin datadog is zero")
-			return false
-		}
-
-	}
-
 	expectedCosts := []string{
 		"agent_host_count",
 		"logs_indexed_events_15_day_count",
 		"container_count_excl_agent",
-		"agent_container",
 		"dbm_host_count",
 	}
 
 	for _, cost := range expectedCosts {
 		if !seenCosts[cost] {
-			log.Errorf("hourly cost %s not found in plugin datadog response", cost)
+			log.Errorf("daily cost %s not found in plugin datadog response", cost)
 			return false
 		}
 	}
 
 	if len(seenCosts) != len(expectedCosts) {
-		log.Errorf("hourly costs returned by plugin datadog do not equal expected costs")
+		log.Errorf("daily costs returned by plugin datadog do not equal expected costs")
 		log.Errorf("seen costs: %v", seenCosts)
 		log.Errorf("expected costs: %v", expectedCosts)
 
-		log.Errorf("response: %v", respHourly)
+		log.Errorf("response: %v", respDaily)
 		return false
 	}
 
@@ -190,18 +176,22 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 	}
 
 	seenCosts = map[string]bool{}
+	sumCosts := float32(0.0)
 	for _, resp := range respHourly {
+
 		for _, cost := range resp.Costs {
 			seenCosts[cost.GetResourceName()] = true
-			if cost.GetListCost() == 0 {
-				log.Errorf("hourly cost returned by plugin datadog is zero")
-				return false
-			}
-			if cost.GetListCost() > 100 {
+			sumCosts += cost.GetBilledCost()
+			if cost.GetBilledCost() > 100 {
 				log.Errorf("hourly cost returned by plugin datadog for %v is greater than 100", cost)
 				return false
 			}
 		}
+
+	}
+	if sumCosts == 0 {
+		log.Errorf("hourly costs returned by datadog plugin are zero")
+		return false
 	}
 
 	for _, cost := range expectedCosts {
