@@ -7,7 +7,6 @@ import (
 	commonconfig "github.com/opencost/opencost-plugins/common/config"
 	snowflakeconfig "github.com/opencost/opencost-plugins/pkg/plugins/snowflake/config"
 	"github.com/opencost/opencost/core/pkg/log"
-	"github.com/rs/zerolog/log"
 )
 
 func main() {
