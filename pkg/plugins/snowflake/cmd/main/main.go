@@ -5,9 +5,26 @@ import (
 	"fmt"
 
 	commonconfig "github.com/opencost/opencost-plugins/common/config"
+	commonrequest "github.com/opencost/opencost-plugins/common/request"
 	snowflakeconfig "github.com/opencost/opencost-plugins/pkg/plugins/snowflake/config"
+	snowflakeplugin "github.com/opencost/opencost-plugins/pkg/plugins/snowflake/plugin"
 	"github.com/opencost/opencost/core/pkg/log"
+	"github.com/opencost/opencost/core/pkg/model/pb"
+	"github.com/opencost/opencost/core/pkg/opencost"
 )
+
+type SnowFlakeClient struct {
+}
+type SnowflakeCostSource struct {
+	snowflakeClient SnowFlakeClient
+}
+
+// GetInvoices fetches invoices from Snowflake
+func GetInvoices(snowflakeClient SnowFlakeClient) ([]snowflakeplugin.LineItem, error) {
+	// Implement the logic to fetch pending invoices from Snowflake
+	// This is a placeholder implementation
+	return [], nil
+}
 
 func main() {
 	//TODO get this information from the config file
@@ -77,4 +94,42 @@ func main() {
 	if err = rows.Err(); err != nil {
 		log.Fatal(err)
 	}
+}
+func (s *SnowflakeCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.CustomCostResponse {
+	results := []*pb.CustomCostResponse{}
+
+	requestErrors := commonrequest.ValidateRequest(req)
+	if len(requestErrors) > 0 {
+		//return empty response
+		return results
+	}
+
+	targets, err := opencost.GetWindows(req.Start.AsTime(), req.End.AsTime(), req.Resolution.AsDuration())
+	if err != nil {
+		log.Errorf("error getting windows: %v", err)
+		errResp := pb.CustomCostResponse{
+			Errors: []string{fmt.Sprintf("error getting windows: %v", err)},
+		}
+		results = append(results, &errResp)
+		return results
+	}
+
+	lineItems, err := GetInvoices(s.snowflakeClient)
+
+	if err != nil {
+		log.Errorf("Error fetching invoices: %v", err)
+		errResp := pb.CustomCostResponse{
+			Errors: []string{fmt.Sprintf("error fetching invoices: %v", err)},
+		}
+		results = append(results, &errResp)
+		return results
+
+	}
+	//TODO convert target to CustomCostResponse
+	for _, target := range targets {
+
+	}
+
+	return results
+
 }
