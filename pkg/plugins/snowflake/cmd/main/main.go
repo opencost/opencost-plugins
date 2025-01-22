@@ -13,22 +13,77 @@ import (
 	"github.com/opencost/opencost/core/pkg/opencost"
 )
 
-type SnowFlakeClient struct {
+// SnowflakeClient defines the interface for interacting with Snowflake
+type SnowflakeClient interface {
+	ExecuteQuery(query string) (*sql.Rows, error)
 }
+
+// snowflakeClient is the concrete implementation of the SnowflakeClient interface
+type snowflakeClient struct {
+	db *sql.DB
+}
+
+// NewSnowflakeClient creates and returns a new SnowflakeClient instance
+func NewSnowflakeClient(snowflakeConfig *snowflakeconfig.SnowflakeConfig) (SnowflakeClient, error) {
+	dsn := fmt.Sprintf("user=%s password=%s account=%s db=%s schema=%s warehouse=%s",
+		snowflakeConfig.Username,
+		snowflakeConfig.Password,
+		snowflakeConfig.Account,
+		snowflakeConfig.Database,
+		snowflakeConfig.Schema,
+		snowflakeConfig.Warehouse)
+
+	// Open a connection to Snowflake
+	db, err := sql.Open("snowflake", dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if the connection is alive
+	if err = db.Ping(); err != nil {
+		return nil, err
+	}
+
+	return &snowflakeClient{db: db}, nil
+}
+
+// ExecuteQuery executes a SQL query and returns the resulting rows
+func (s *snowflakeClient) ExecuteQuery(query string) (*sql.Rows, error) {
+	return s.db.Query(query)
+}
+
 type SnowflakeCostSource struct {
-	snowflakeClient SnowFlakeClient
+	snowflakeClient SnowflakeClient
 }
 
 // GetInvoices fetches invoices from Snowflake
-func GetInvoices(snowflakeClient SnowFlakeClient) ([]snowflakeplugin.LineItem, error) {
+func GetInvoices(snowflakeClient SnowflakeClient) ([]snowflakeplugin.LineItem, error) {
+	// Example query
+	//TODO make sure that query maps to snowflakeplugin.LineItem
+	query := `
+		SELECT 
+			date_trunc('day', start_time) AS usage_date,
+			SUM(credits_used) AS total_credits
+		FROM snowflake.account_usage.warehouse_metering_history
+		WHERE start_time >= DATEADD(day, -30, CURRENT_TIMESTAMP())
+		GROUP BY usage_date
+		ORDER BY usage_date DESC
+	`
+
+	// Execute the query using the Snowflake client
+	rows, err := snowflakeClient.ExecuteQuery(query)
+	if err != nil {
+		log.Fatal("Query execution failed:", err)
+		return nil, err
+	}
+	defer rows.Close()
 	// Implement the logic to fetch pending invoices from Snowflake
 	// This is a placeholder implementation
-	return [], nil
+	return rows, nil
 }
 
 func main() {
-	//TODO get this information from the config file
-	// Snowflake connection details
+	
 	log.Debug("Initializing Snowflake plugin")
 
 	configFile, err := commonconfig.GetConfigFilePath()
@@ -40,60 +95,36 @@ func main() {
 	if err != nil {
 		log.Fatalf("error building Atlas config: %v", err)
 	}
-	log.SetLogLevel(snowflakeConfig.LogLevel)
-	dsn := fmt.Sprintf("user=%s password=%s account=%s db=%s schema=%s warehouse=%s",
-		snowflakeConfig.Username,  // Replace with your Snowflake username
-		snowflakeConfig.Password,  // Replace with your Snowflake password
-		snowflakeConfig.Account,   // Replace with your Snowflake account name
-		snowflakeConfig.Database,  // Replace with your database name
-		snowflakeConfig.Schema,    // Replace with your schema name
-		snowflakeConfig.Warehouse) // Replace with your warehouse name
+	log.SetLogLevel("info") //default
+	if snowflakeConfig.LogLevel != "" {
+		log.SetLogLevel(snowflakeConfig.LogLevel)
 
-	// Open a connection to Snowflake
-	db, err := sql.Open("snowflake", dsn)
+	}
+
+	client, err := NewSnowflakeClient(snowflakeConfig)
+	
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to create Snowflake client:", err)
 	}
-	defer db.Close()
-
-	// Check if the connection is alive
-	err = db.Ping()
-	if err != nil {
-		log.Fatal(err)
+	snowflakeCostSource := SnowflakeCostSource{
+		snowflakeClient: client
 	}
+	defer client.(*snowflakeClient).db.Close()
 
-	// Example query to fetch costs; adjust this query based on your needs and Snowflake's usage data
-	query := `
-    SELECT 
-        date_trunc('day', start_time) AS usage_date,
-        SUM(credits_used) AS total_credits
-    FROM snowflake.account_usage.warehouse_metering_history
-    WHERE start_time >= DATEADD(day, -30, CURRENT_TIMESTAMP())
-    GROUP BY usage_date
-    ORDER BY usage_date DESC
-    `
-
-	rows, err := db.Query(query)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer rows.Close()
-
-	// Print the results
-	fmt.Println("Date\t\tTotal Credits")
-	for rows.Next() {
-		var date string
-		var credits float64
-		if err := rows.Scan(&date, &credits); err != nil {
-			log.Fatal(err)
-		}
-		fmt.Printf("%s\t%.2f\n", date, credits)
+	// pluginMap is the map of plugins we can dispense.
+	var pluginMap = map[string]plugin.Plugin{
+		"CustomCostSource": &ocplugin.CustomCostPlugin{Impl: &snowflakeCostSource},
 	}
 
-	// Check for errors from iterating over rows
-	if err = rows.Err(); err != nil {
-		log.Fatal(err)
-	}
+	plugin.Serve(&plugin.ServeConfig{
+		HandshakeConfig: handshakeConfig,
+		Plugins:         pluginMap,
+		GRPCServer:      plugin.DefaultGRPCServer,
+	})
+
+	
+
+	
 }
 func (s *SnowflakeCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.CustomCostResponse {
 	results := []*pb.CustomCostResponse{}
@@ -127,6 +158,34 @@ func (s *SnowflakeCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Cu
 	}
 	//TODO convert target to CustomCostResponse
 	for _, target := range targets {
+		if target.Start().After(time.Now().UTC()) {
+			log.Debugf("skipping future window %v", target)
+			continue
+		}
+
+		log.Debugf("fetching atlas costs for window %v", target)
+
+		// Print the results
+	fmt.Println("Date\t\tTotal Credits")
+	for rows.Next() {
+		var date string
+		var credits float64
+		var warehouse string
+		if err := rows.Scan(&date, &credits, &warehouse); err != nil {
+			log.Fatal(err)
+		}
+		//TODO extract lineItem into CustomCostResponse
+		//result := a.getAtlasCostsForWindow(&target, lineItems)
+
+		results = append(results, result)
+		//fmt.Printf("%s\t%.2f\n", date, credits)
+
+	}
+
+	// Check for errors from iterating over rows
+	if err = rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 
 	}
 
