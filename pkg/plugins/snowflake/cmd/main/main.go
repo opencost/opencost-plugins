@@ -90,7 +90,7 @@ func GetInvoices(snowflakeClient SnowflakeClient) ([]snowflakeplugin.LineItem, e
 	rows, err := snowflakeClient.ExecuteQuery(query)
 	if err != nil {
 
-		log.Fatalf("Query execution failed:", err)
+		log.Fatalf("Query execution failed: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -103,7 +103,7 @@ func GetInvoices(snowflakeClient SnowflakeClient) ([]snowflakeplugin.LineItem, e
 		var date string
 
 		if err := rows.Scan(&date, &warehouse, &credits); err != nil {
-			log.Fatalf("", err)
+			log.Fatalf("%v", err)
 		}
 
 		lineItem := snowflakeplugin.LineItem{
@@ -115,8 +115,10 @@ func GetInvoices(snowflakeClient SnowflakeClient) ([]snowflakeplugin.LineItem, e
 		lineItems = append(lineItems, lineItem)
 	}
 
-	if err = rows.Err(); err != nil {
-		log.Fatalf("", err)
+	sqlError := rows.Err()
+	if sqlError != nil {
+		log.Fatalf("%v", sqlError)
+		return nil, sqlError
 	}
 
 	return lineItems, nil
@@ -145,7 +147,7 @@ func main() {
 	client, err := NewSnowflakeClient(snowflakeConfig)
 
 	if err != nil {
-		log.Fatalf("Failed to create Snowflake client:", err)
+		log.Fatalf("Failed to create Snowflake client: %v", err)
 	}
 	snowflakeCostSource := SnowflakeCostSource{
 		snowflakeClient: client,
@@ -215,13 +217,14 @@ func (s *SnowflakeCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Cu
 func filterLineItemsByWindow(win *opencost.Window, lineItems []snowflakeplugin.LineItem) []*pb.CustomCost {
 	var filteredItems []*pb.CustomCost
 	for _, li := range lineItems {
-		if li.Date == win.Start().Format("2006-01-02 15:04:05") {
-			cost := &pb.CustomCost{
-				UsageQuantity: li.CreditUsed,
-				ResourceName:  li.WarehouseName,
-			}
-			filteredItems = append(filteredItems, cost)
+		log.Debugf("Window Start: %s ", win.Start().Format("2006-01-02 15:04:05"))
+
+		cost := &pb.CustomCost{
+			UsageQuantity: li.CreditUsed,
+			ResourceName:  li.WarehouseName,
 		}
+		filteredItems = append(filteredItems, cost)
+
 	}
 	return filteredItems
 }
