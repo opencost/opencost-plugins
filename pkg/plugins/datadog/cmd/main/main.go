@@ -4,20 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	_nethttp "net/http"
 	"os"
-	"regexp"
-	"strconv"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadogV2"
+	"github.com/agnivade/levenshtein"
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/DataDog/datadog-api-client-go/v2/api/datadogV1"
 	"github.com/hashicorp/go-plugin"
 	commonconfig "github.com/opencost/opencost-plugins/pkg/common/config"
 	datadogplugin "github.com/opencost/opencost-plugins/pkg/plugins/datadog/datadogplugin"
@@ -44,6 +43,7 @@ var handshakeConfig = plugin.HandshakeConfig{
 type DatadogCostSource struct {
 	ddCtx       context.Context
 	usageApi    *datadogV2.UsageMeteringApi
+	v1UsageApi  *datadogV1.UsageMeteringApi
 	rateLimiter *rate.Limiter
 }
 
@@ -60,20 +60,19 @@ func (d *DatadogCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Cust
 		return results
 	}
 
-	// Call the function to scrape prices
-	listPricing, err := scrapeDatadogPrices(url)
-	if err != nil {
-		log.Errorf("error getting dd pricing: %v", err)
-		errResp := pb.CustomCostResponse{
-			Errors: []string{fmt.Sprintf("error getting dd pricing: %v", err)},
-		}
-		results = append(results, &errResp)
-		return results
-	} else {
-		log.Debugf("got list pricing: %v", listPricing.Details)
-	}
-
 	for _, target := range targets {
+		// Call the function to scrape prices
+		unitPricing, err := d.GetDDUnitPrices(target.Start().UTC())
+		if err != nil {
+			log.Errorf("error getting dd pricing: %v", err)
+			errResp := pb.CustomCostResponse{
+				Errors: []string{fmt.Sprintf("error getting dd pricing: %v", err)},
+			}
+			results = append(results, &errResp)
+			return results
+		} else {
+			log.Debugf("got unit pricing: %v", unitPricing)
+		}
 		// DataDog gets mad if we ask them to tell the future
 		if target.Start().After(time.Now().UTC()) {
 			log.Debugf("skipping future window %v", target)
@@ -81,7 +80,7 @@ func (d *DatadogCostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Cust
 		}
 
 		log.Debugf("fetching DD costs for window %v", target)
-		result := d.getDDCostsForWindow(target, listPricing)
+		result := d.getDDCostsForWindow(target, unitPricing)
 		results = append(results, result)
 	}
 
@@ -105,7 +104,7 @@ func main() {
 	ddCostSrc := DatadogCostSource{
 		rateLimiter: rateLimiter,
 	}
-	ddCostSrc.ddCtx, ddCostSrc.usageApi = getDatadogClients(*ddConfig)
+	ddCostSrc.ddCtx, ddCostSrc.usageApi, ddCostSrc.v1UsageApi = getDatadogClients(*ddConfig)
 
 	// pluginMap is the map of plugins we can dispense.
 	var pluginMap = map[string]plugin.Plugin{
@@ -132,7 +131,7 @@ func boilerplateDDCustomCost(win opencost.Window) pb.CustomCostResponse {
 		Costs:      []*pb.CustomCost{},
 	}
 }
-func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPricing *datadogplugin.PricingInformation) *pb.CustomCostResponse {
+func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPricing map[string]billableCost) *pb.CustomCostResponse {
 	ccResp := boilerplateDDCustomCost(window)
 	costs := map[string]*pb.CustomCost{}
 	nextPageId := "init"
@@ -196,34 +195,42 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 					continue
 				}
 
-				desc, usageUnit, pricing, currency := getListingInfo(window, *resp.Data[index].Attributes.ProductFamily, *resp.Data[index].Attributes.Measurements[indexMeas].UsageType, listPricing)
-				ccResp.Currency = currency
+				matched, pricing := matchUsageToPricing(*resp.Data[index].Attributes.Measurements[indexMeas].UsageType, listPricing)
+				log.Infof("matched %s to %s", *resp.Data[index].Attributes.Measurements[indexMeas].UsageType, matched)
 				provId := *resp.Data[index].Attributes.PublicId + "/" + *resp.Data[index].Attributes.Measurements[indexMeas].UsageType
-				if cost, found := costs[provId]; found {
-					// we already have this cost type for the window, so just update the usages and costs
-					cost.UsageQuantity += usageQty
-					cost.ListCost += usageQty * pricing
+				if matched == "" {
+					log.Infof("no pricing found for %s", *resp.Data[index].Attributes.Measurements[indexMeas].UsageType)
+					continue
+				}
+
+				billedCost := float32(pricing.Cost) * usageQty
+
+				if _, found := costs[provId]; found {
+					// we have already encountered this cost type for this window, so add to the existing cost entry
+					costs[provId].UsageQuantity += usageQty
+					costs[provId].BilledCost += billedCost
 				} else {
 					// we have not encountered this cost type for this window yet, so create a new cost entry
 					cost := pb.CustomCost{
 						Zone:               *resp.Data[index].Attributes.Region,
 						AccountName:        *resp.Data[index].Attributes.OrgName,
 						ChargeCategory:     "usage",
-						Description:        desc,
+						Description:        "nil",
 						ResourceName:       *resp.Data[index].Attributes.Measurements[indexMeas].UsageType,
 						ResourceType:       *resp.Data[index].Attributes.ProductFamily,
 						Id:                 *resp.Data[index].Id,
 						ProviderId:         provId,
 						Labels:             map[string]string{},
-						ListCost:           usageQty * pricing,
-						ListUnitPrice:      pricing,
+						ListCost:           0,
+						ListUnitPrice:      0,
+						BilledCost:         billedCost,
 						UsageQuantity:      usageQty,
-						UsageUnit:          usageUnit,
+						UsageUnit:          pricing.unit,
 						ExtendedAttributes: nil,
 					}
+
 					costs[provId] = &cost
 				}
-
 			}
 		}
 		if resp.Meta != nil && resp.Meta.Pagination != nil && resp.Meta.Pagination.NextRecordId.IsSet() {
@@ -243,92 +250,73 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 	// this post processing stage de-duplicates those usages and costs
 	postProcess(&ccResp)
 
-	// query from the first of the window's month until the window end's day so that we can properly adjust for the
-	// cumulative nature of the response
-	startDate := time.Date(window.Start().UTC().Year(), window.Start().UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
-	endDate := time.Date(window.End().UTC().Year(), window.End().UTC().Month(), window.End().UTC().Day(), 0, 0, 0, 0, time.UTC)
-
-	view := "sub-org"
-	params := datadogV2.NewGetEstimatedCostByOrgOptionalParameters()
-	params.StartDate = &startDate
-	params.EndDate = &endDate
-	params.View = &view
-	resp, r, err := d.usageApi.GetEstimatedCostByOrg(d.ddCtx, *params)
-	if err != nil {
-		log.Errorf("Error when calling `UsageMeteringApi.GetEstimatedCostByOrg`: %v\n", err)
-		log.Errorf("Full HTTP response: %v\n", r)
-		ccResp.Errors = append(ccResp.Errors, err.Error())
-	}
-
-	previousChargeCosts := make(map[string]float32)
-
-	// estimated costs from datadog are per-day, so we scale in the event that we want hourly costs
-	var costFactor float32
-	switch window.Duration().Hours() {
-	case 24:
-		costFactor = 1.0
-	case 1:
-		costFactor = 1.0 / 24.0
-	default:
-		err = fmt.Errorf("unsupported window duration: %v hours", window.Duration().Hours())
-
-		log.Errorf("%v\n", err)
-		ccResp.Errors = append(ccResp.Errors, err.Error())
-		return &ccResp
-	}
-
-	costs = map[string]*pb.CustomCost{}
-	for _, costResp := range resp.Data {
-		attributes := costResp.Attributes
-		for _, charge := range attributes.Charges {
-			chargeCost := float32(*charge.Cost)
-			// we only care about non-zero totals. by filtering out non-totals, we avoid duplicate costs from the
-			// datadog response
-			if (chargeCost == 0) || (*charge.ChargeType != "total") {
-				continue
-			}
-
-			// adjust the charge cost, as the charges are cumulative throughout the response
-			adjustedChargeCost := chargeCost
-			if _, ok := previousChargeCosts[*charge.ProductName]; ok {
-				adjustedChargeCost -= previousChargeCosts[*charge.ProductName]
-			}
-			previousChargeCosts[*charge.ProductName] = chargeCost
-
-			adjustedChargeCost *= costFactor
-
-			if attributes.Date.Day() != window.Start().Day() {
-				continue
-			}
-
-			provId := *attributes.PublicId + "/" + *charge.ProductName
-			if cost, found := costs[provId]; found {
-				// we already have this cost type for the window, so just update the billed cost
-				cost.BilledCost += adjustedChargeCost
-			} else {
-				// we have not encountered this cost type for this window yet, so create a new cost entry
-				cost := pb.CustomCost{
-					Zone:               *attributes.Region,
-					AccountName:        *attributes.OrgName,
-					ChargeCategory:     "billing",
-					ResourceName:       *charge.ProductName,
-					Id:                 *costResp.Id,
-					ProviderId:         provId,
-					Labels:             map[string]string{},
-					BilledCost:         adjustedChargeCost,
-					ExtendedAttributes: nil,
-				}
-				costs[provId] = &cost
-			}
-		}
-	}
-	for _, cost := range costs {
-		ccResp.Costs = append(ccResp.Costs, cost)
-	}
-
 	return &ccResp
 }
 
+func matchUsageToPricing(usageType string, pricing map[string]billableCost) (string, *billableCost) {
+	// for the usage, remove _count from the end of the usage type
+	usageType = strings.TrimSuffix(usageType, "_count")
+
+	// not specific enough to match on
+	if usageType == "host" {
+		return "", nil
+	}
+	// if the usage type is in the pricing map, use that
+	if _, found := pricing[usageType]; found {
+		entry := pricing[usageType]
+		return usageType, &entry
+	}
+
+	// break up the usage on _
+	tokens := strings.Split(usageType, "_")
+	// find the first pricing key that contains all tokens
+	for key, price := range pricing {
+		matchesAll := true
+		for _, token := range tokens {
+			if !strings.Contains(key, token) {
+				matchesAll = false
+				break
+			}
+		}
+		if matchesAll {
+			return key, &price
+		}
+	}
+
+	// try replacing agent with infra and checking that
+	agentAsInfra := strings.ReplaceAll(usageType, "agent", "infra")
+	tokens = strings.Split(agentAsInfra, "_")
+	// find the first pricing key that contains all tokens
+	for key, price := range pricing {
+		matchesAll := true
+		for _, token := range tokens {
+			if !strings.Contains(key, token) {
+				matchesAll = false
+				break
+			}
+		}
+		if matchesAll {
+			return key, &price
+		}
+	}
+
+	// if still no pricing key is found, compute the levenshtein distance between the usage type and the pricing key
+	// and use the one with the smallest distance
+	smallestDist := 4000000000
+	var closestKey string
+	for key := range pricing {
+		distance := levenshtein.ComputeDistance(usageType, key)
+		if distance < smallestDist {
+			smallestDist = distance
+			closestKey = key
+		}
+	}
+
+	// remember the pricing keys we have already matched. if we have already matched a pricing key, don't match it again
+	entry := pricing[closestKey]
+	return closestKey, &entry
+
+}
 func postProcess(ccResp *pb.CustomCostResponse) {
 	if ccResp == nil {
 		return
@@ -338,11 +326,11 @@ func postProcess(ccResp *pb.CustomCostResponse) {
 
 	ccResp.Costs = processLogUsage(ccResp.Costs)
 
-	// removes any items that have 0 usage, either because of post processing or otherwise
-	ccResp.Costs = removeZeroUsages(ccResp.Costs)
-
 	// DBM queries have 200 * number of hosts included. We need to adjust the costs to reflect this
 	ccResp.Costs = adjustDBMQueries(ccResp.Costs)
+
+	// removes any items that have 0 usage, either because of post processing or otherwise
+	ccResp.Costs = removeZeroUsages(ccResp.Costs)
 }
 
 // as per https://www.datadoghq.com/pricing/?product=database-monitoring#database-monitoring-can-i-still-use-dbm-if-i-have-additional-normalized-queries-past-the-a-hrefpricingallotmentsallotteda-amount
@@ -383,75 +371,36 @@ func adjustDBMQueries(costs []*pb.CustomCost) []*pb.CustomCost {
 	return costs
 }
 
-// removes any items that have 0 usage, either because of post processing or otherwise
+// removes any items that have 0 usage or cost, either because of post processing or otherwise
 func removeZeroUsages(costs []*pb.CustomCost) []*pb.CustomCost {
+	log.Tracef("POST -costs length before post processing: %d", len(costs))
 	for index := 0; index < len(costs); index++ {
-		if costs[index].UsageQuantity < 0.001 {
-			log.Debugf("removing cost %s because it has 0 usage", costs[index].ProviderId)
+		log.Tracef("POST - looking at cost %s with usage %f", costs[index].ResourceName, costs[index].UsageQuantity)
+		if costs[index].UsageQuantity < 0.001 && costs[index].ListCost == 0.0 && costs[index].BilledCost == 0.0 {
+			if costs[index].ResourceName == "dbm_queries_count" {
+				log.Tracef("leaving dbm queries cost in place")
+				continue
+			}
+			log.Tracef("POST -removing cost %s because it has 0 usage", costs[index].ProviderId)
 			costs = append(costs[:index], costs[index+1:]...)
-			index = 0
+			log.Tracef("POST - costs is now %d", len(costs))
+			index = -1
 		}
 	}
+	log.Tracef("POST -costs length after post processing: %d", len(costs))
+
 	return costs
 }
 
 func processInfraHosts(costs []*pb.CustomCost) []*pb.CustomCost {
-	// remove the container_count_excl_agent item
-	// subtract the container_count_excl_agent from the container_count
-	// re-add as a synthetic 'agent container' item
-	var cc *pb.CustomCost
-	for index := range costs {
+	// remove the container_count item
+	for index := 0; index < len(costs); index++ {
 		if costs[index].ResourceName == "container_count" {
-			cc = costs[index]
 			costs = append(costs[:index], costs[index+1:]...)
-			break
+			index = 0
 		}
 	}
 
-	if cc != nil {
-		numAgents := float32(0.0)
-		for index := range costs {
-			if costs[index].ResourceName == "container_count_excl_agent" {
-				numAgents = float32(cc.UsageQuantity) - float32(costs[index].UsageQuantity)
-				break
-			}
-		}
-
-		cc.Description = "agent container"
-		cc.UsageQuantity = numAgents
-		cc.ResourceName = "agent_container"
-		cc.ListCost = numAgents * cc.ListUnitPrice
-
-		costs = append(costs, cc)
-	}
-
-	// remove the host_count item
-	// subtract the agent_cost_count from host_count item
-	// remaining gets put into a 'other hosts' item count
-	var hc *pb.CustomCost
-	for index := range costs {
-		if costs[index].ResourceName == "host_count" {
-			hc = costs[index]
-			costs = append(costs[:index], costs[index+1:]...)
-			break
-		}
-	}
-
-	if hc != nil {
-		otherHosts := float32(0.0)
-		for index := range costs {
-			if costs[index].ResourceName == "agent_host_count" {
-				otherHosts = float32(hc.UsageQuantity) - float32(costs[index].UsageQuantity)
-				break
-			}
-		}
-
-		hc.Description = "other hosts"
-		hc.UsageQuantity = otherHosts
-		hc.ResourceName = "other_hosts"
-		hc.ListCost = otherHosts * hc.ListUnitPrice
-		costs = append(costs, hc)
-	}
 	return costs
 }
 
@@ -499,117 +448,7 @@ func processLogUsage(costs []*pb.CustomCost) []*pb.CustomCost {
 	return costs
 }
 
-// the public pricing used in the pricing list doesn't always match the usage reports
-// therefore, we maintain a list of aliases
-var usageToPricingMap = map[string]string{
-	"timeseries": "custom_metrics",
-
-	"apm_uncategorized_host_count":     "apm_hosts",
-	"apm_host_count_incl_usm":          "apm_hosts",
-	"apm_azure_app_service_host_count": "apm_hosts",
-	"apm_devsecops_host_count":         "apm_hosts",
-	"apm_host_count":                   "apm_hosts",
-	"opentelemetry_apm_host_count":     "apm_hosts",
-	"apm_fargate_count":                "apm_hosts",
-
-	"dbm_host_count":                 "dbm",
-	"dbm_queries_count":              "dbm_queries",
-	"container_count":                "containers",
-	"container_count_excl_agent":     "containers",
-	"billable_ingested_bytes":        "ingested_logs",
-	"ingested_events_bytes":          "ingested_logs",
-	"logs_live_ingested_bytes":       "ingested_logs",
-	"logs_rehydrated_ingested_bytes": "ingested_logs",
-	"indexed_events_count":           "indexed_logs",
-	"logs_live_indexed_count":        "indexed_logs",
-	"synthetics_api":                 "api_tests",
-	"synthetics_browser":             "browser_checks",
-	"tasks_count":                    "fargate_tasks",
-	"rum":                            "rum_events",
-	"analyzed_logs":                  "security_logs",
-	"snmp":                           "snmp_device",
-	"invocations_sum":                "serverless_inv",
-}
-
-var pricingMap = map[string]float64{
-	"custom_metrics": 100.0,
-	"indexed_logs":   1000000.0,
-	"ingested_logs":  1024.0 * 1024.0 * 1024.0 * 1024.0,
-	"api_tests":      10000.0,
-	"browser_checks": 1000.0,
-	"rum_events":     10000.0,
-	"security_logs":  1024.0 * 1024.0 * 1024.0 * 1024.0,
-	"serverless_inv": 1000000.0,
-}
-
-var rateFamilies = map[string]int{
-	"infra_hosts": 730.0,
-	"apm_hosts":   730.0,
-	"containers":  730.0,
-	"dbm":         730.0,
-}
-
-func getListingInfo(window opencost.Window, productfamily string, usageType string, listPricing *datadogplugin.PricingInformation) (description string, usageUnit string, pricing float32, currency string) {
-	pricingKey := ""
-	var found bool
-	// first, check if the usage type is mapped to a pricing key
-	if pricingKey, found = usageToPricingMap[usageType]; found {
-		log.Debugf("usage type %s was mapped to pricing key %s", usageType, pricingKey)
-	} else if pricingKey, found = usageToPricingMap[productfamily]; found {
-		// if it isn't then check if the family is mapped to a pricing key
-		log.Debugf("product family %s was mapped to pricing key %s", productfamily, pricingKey)
-	} else {
-		// if it isn't, then the family is the pricing key
-		pricingKey = productfamily
-	}
-	matchedPrice := false
-	// search through the pricing for the right key
-	for _, detail := range listPricing.Details {
-		if pricingKey == detail.Name {
-			matchedPrice = true
-			description = detail.DetailDescription
-			usageUnit = detail.Units
-			currency = detail.OneMonths.Currency
-			pricingFloat, err := strconv.ParseFloat(detail.OneMonths.Rate, 32)
-			if err != nil {
-				log.Errorf("error converting string to float for rate: %s", detail.OneMonths.Rate)
-			}
-
-			// if the family is a rate family, then the pricing is per hour
-			if hourlyPriceDenominator, found := rateFamilies[pricingKey]; found {
-				// adjust the pricing to fit the window duration
-				pricingPerHour := float32(pricingFloat) / float32(hourlyPriceDenominator)
-				pricingPerWindow := pricingPerHour
-				usageUnit = strings.TrimSuffix(usageUnit, "s")
-				usageUnit += " - hours"
-				pricing = pricingPerWindow
-				return
-			} else {
-				// if the family is a cumulative family, then the pricing is per unit
-				// check for a scale factor on the pricing
-				if scalefactor, found := pricingMap[pricingKey]; found {
-					pricing = float32(pricingFloat) / float32(scalefactor)
-				} else {
-					pricing = float32(pricingFloat)
-				}
-				return
-			}
-
-		}
-	}
-
-	if !matchedPrice {
-		log.Warnf("unable to find pricing for product %s/%s. going to set to 0 price", productfamily, usageType)
-		usageType = "PRICING UNAVAILABLE"
-		description = productfamily + " " + usageType
-		pricing = 0.0
-		currency = ""
-	}
-	// return the data from the usage entry
-	return
-}
-
-func getDatadogClients(config datadogplugin.DatadogConfig) (context.Context, *datadogV2.UsageMeteringApi) {
+func getDatadogClients(config datadogplugin.DatadogConfig) (context.Context, *datadogV2.UsageMeteringApi, *datadogV1.UsageMeteringApi) {
 	ddctx := datadog.NewDefaultContext(context.Background())
 	ddctx = context.WithValue(
 		ddctx,
@@ -631,7 +470,8 @@ func getDatadogClients(config datadogplugin.DatadogConfig) (context.Context, *da
 	configuration := datadog.NewConfiguration()
 	apiClient := datadog.NewAPIClient(configuration)
 	usageAPI := datadogV2.NewUsageMeteringApi(apiClient)
-	return ddctx, usageAPI
+	v1UsageAPI := datadogV1.NewUsageMeteringApi(apiClient)
+	return ddctx, usageAPI, v1UsageAPI
 }
 
 func getDatadogConfig(configFilePath string) (*datadogplugin.DatadogConfig, error) {
@@ -652,60 +492,143 @@ func getDatadogConfig(configFilePath string) (*datadogplugin.DatadogConfig, erro
 	return &result, nil
 }
 
-func scrapeDatadogPrices(url string) (*datadogplugin.PricingInformation, error) {
-	maxTries := 5
-	var result *datadogplugin.PricingInformation
-	var errTry error
-	for try := 1; try <= maxTries; try++ {
-		var response *http.Response
-		// Send a GET request to the URL
-		response, errTry = http.Get(url)
-		if errTry != nil || response.StatusCode != http.StatusOK {
-			log.Errorf("failed to fetch the page: %v", errTry)
-			time.Sleep(30 * time.Second)
-			response.Body.Close()
-			continue
-		}
+func (d *DatadogCostSource) GetDDUnitPrices(windowStart time.Time) (map[string]billableCost, error) {
 
-		b, err := io.ReadAll(response.Body)
-		if err != nil {
-			errTry = err
-			response.Body.Close()
-			log.Errorf("failed to read pricing page body: %v", err)
-			time.Sleep(30 * time.Second)
-			continue
-		}
-		response.Body.Close()
-		res := datadogplugin.DatadogProJSON{}
-		r := regexp.MustCompile(`var productDetailData = \s*(.*?)\s*};`)
-		log.Tracef("got response: %s", string(b))
-		matches := r.FindAllStringSubmatch(string(b), -1)
-		if len(matches) != 1 {
-			errTry = err
-			log.Errorf("requires exactly 1 product detail data, got %d", len(matches))
-			time.Sleep(30 * time.Second)
-			continue
-		}
+	// DD estimated costs can be delayed 72 hours
+	// so ensure we are going far enough back
+	stableTimeframe := time.Now().UTC().Add(-3 * 24 * time.Hour)
 
-		log.Tracef("matches[0][1]:" + matches[0][1])
-		// add back in the closing curly brace that was used to pattern match
-		err = json.Unmarshal([]byte(matches[0][1]+"}"), &res)
-		if err != nil {
-			errTry = err
-			log.Errorf("failed to read pricing page body: %v", err)
-			time.Sleep(30 * time.Second)
-			continue
-		}
-
-		if errTry == nil {
-			result = &res.OfferData.PricingInformation
+	targetMonth := time.Date(stableTimeframe.Year(), stableTimeframe.Month(), 1, 0, 0, 0, 0, time.UTC)
+	targetMonthEnd := time.Date(stableTimeframe.Year(), stableTimeframe.Month()+1, 1, 0, 0, 0, 0, time.UTC)
+	// first, get the billable usage for the month
+	opts := datadogV1.GetUsageBillableSummaryOptionalParameters{
+		Month: &targetMonth,
+	}
+	var respBillableUsage datadogV1.UsageBillableSummaryResponse
+	var err error
+	for try := 1; try <= 5; {
+		respBillableUsage, _, err = d.v1UsageApi.GetUsageBillableSummary(d.ddCtx, opts)
+		if err == nil {
 			break
+		} else {
+			if strings.Contains(err.Error(), "429") {
+				log.Errorf("rate limit reached, retrying...")
+			} else {
+				break
+			}
+			time.Sleep(30 * time.Second)
+			try++
 		}
 
 	}
-
-	if errTry != nil {
-		return nil, fmt.Errorf("failed to fetch the page after %d tries: %w", maxTries, errTry)
+	if err != nil {
+		return nil, fmt.Errorf("error getting usage billable usage summary: %v", err)
 	}
+	// then, get the estimated cost for the month
+	// the start date should be the beginning of the month
+	// the end date should be the end of the last month, or the stable time frame, depending on if we are in the first 3 days of the new month or not
+	endDateToUse := targetMonthEnd
+	if time.Now().Before(targetMonthEnd) {
+		endDateToUse = stableTimeframe
+	}
+
+	costOpts := datadogV2.GetEstimatedCostByOrgOptionalParameters{
+		StartDate: &targetMonth,
+		EndDate:   &endDateToUse,
+	}
+	var respEstimatedCost datadogV2.CostByOrgResponse
+	for try := 1; try <= 5; {
+		respEstimatedCost, _, err = d.usageApi.GetEstimatedCostByOrg(d.ddCtx, costOpts)
+
+		if err == nil {
+			break
+		} else {
+			if strings.Contains(err.Error(), "429") {
+				log.Errorf("rate limit reached, retrying...")
+			} else {
+				break
+			}
+			time.Sleep(30 * time.Second)
+			try++
+		}
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("after calling `UsageMeteringApi.GetEstimatedCostByOrg` %d times, still getting error: %v", 5, err)
+	}
+
+	// now, we need to calculate the unit prices
+	// the unit price is the estimated cost divided by the billable usage
+	// we need to do this for each product family
+	costsByFamily := make(map[string]float64)
+	latestCosts := respEstimatedCost.Data[len(respEstimatedCost.Data)-1]
+	attrs := latestCosts.Attributes
+	for _, charge := range attrs.Charges {
+		if *charge.ChargeType != "total" {
+			continue
+		}
+		costsByFamily[*charge.ProductName] = float64(*charge.Cost)
+	}
+
+	result := make(map[string]billableCost)
+	for _, usage := range respBillableUsage.Usage {
+		log.Debugf("usage: %v", usage)
+		for productName, cost := range costsByFamily {
+			usageAmount, unit := GetAccountBillableUsage(productName, usage.Usage)
+			if usageAmount == 0 {
+				continue
+			}
+			// if the product family has 'hosts' in it, then the usage is per month
+			// so we need to adjust the cost to be per hour
+			isRated := false
+			if strings.Contains(productName, "host") {
+				isRated = true
+				cost /= float64(730)
+			}
+
+			result[productName] = billableCost{
+				ProductName: productName,
+				Cost:        cost / float64(usageAmount),
+				isRated:     isRated,
+				unit:        unit,
+			}
+		}
+	}
+
 	return result, nil
+}
+
+type billableCost struct {
+	ProductName string
+	Cost        float64
+	isRated     bool
+	unit        string
+}
+
+// CheckAccountBillableUsage checks if any AccountBillableUsage equals one.
+func GetAccountBillableUsage(billingDimension string, o *datadogV1.UsageBillableSummaryKeys) (int64, string) {
+	v := reflect.ValueOf(o).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		if field.Kind() == reflect.Ptr && !field.IsNil() {
+			usage := field.Interface().(*datadogV1.UsageBillableSummaryBody)
+			if len(usage.AdditionalProperties) > 0 {
+				if usage.AdditionalProperties["billing_dimension"] == billingDimension {
+					return *usage.AccountBillableUsage, *usage.UsageUnit
+				}
+			}
+		}
+	}
+
+	// if not in the reflected fields, check the AdditionalProperties
+	for name, usage := range o.AdditionalProperties {
+		if strings.Contains(name, billingDimension) {
+			untypedUsage := usage.(map[string]interface{})
+			untyped := untypedUsage["account_billable_usage"]
+			typed := int64(untyped.(float64))
+			return typed, untypedUsage["usage_unit"].(string)
+		}
+	}
+	log.Warnf("no AccountBillableUsage found for billing dimension %s", billingDimension)
+	return 0, ""
 }

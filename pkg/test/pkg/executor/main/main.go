@@ -41,6 +41,10 @@ func main() {
 			// for each plugin given via a flag
 			for _, plugin := range plugins {
 				log.Infof("Testing plugin: %s", plugin)
+				plugin = strings.TrimSpace(plugin)
+				if plugin == "" {
+					continue
+				}
 
 				// write the config in PLUGIN_NAME_CONFIG out to a file
 				envVarName := fmt.Sprintf("%s_CONFIG", strings.ReplaceAll(strings.ToUpper(plugin), "-", "_"))
@@ -71,9 +75,9 @@ func main() {
 				pluginPath := cwd + "/pkg/plugins/" + plugin
 				respDaily := getResponse(pluginPath, file.Name(), windowStart, windowEnd, 24*time.Hour)
 
-				// request usage for 2 days ago in hourly increments
-				windowStart = time.Now().AddDate(0, 0, -2).Truncate(24 * time.Hour)
-				windowEnd = time.Now().AddDate(0, 0, -1).Truncate(24 * time.Hour)
+				// request usage for 3 days ago in hourly increments
+				windowStart = time.Now().AddDate(0, 0, -4).Truncate(24 * time.Hour)
+				windowEnd = time.Now().AddDate(0, 0, -3).Truncate(24 * time.Hour)
 				// invoke plugin via harness
 				respHourly := getResponse(pluginPath, file.Name(), windowStart, windowEnd, 1*time.Hour)
 
