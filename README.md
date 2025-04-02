@@ -25,20 +25,20 @@ At the most basic level, all a plugin needs to do is gather cost data given a ti
 
 ## Plugin setup
 - Pull the repo locally.
-- Create a directory within the repo for the new plugin. Check out the [Datadog plugin](https://github.com/opencost/opencost-plugins/tree/main/datadog) for a reference to follow along with.
+- Create a directory within the repo for the new plugin. Check out the [Datadog plugin](https://github.com/opencost/opencost-plugins/tree/main/pkg/plugins/datadog) for a reference to follow along with.
 - Create the plugin subdirectories:
-    - `<repo>/<plugin>/cmd/main/`
+    - `<repo>/pkg/plugins/<plugin>/cmd/main/`
         - This will contain the actual logic of the plugin.
-    - `<repo>/<plugin>/<plugin>plugin/`
+    - `<repo>/pkg/plugins/<plugin>/<plugin>plugin/`
         - This will contain the plugin config struct and any other structs for handling requests/responses in the plugin.
-    - `<repo>/<plugin>/tests/`
+    - `<repo>/pkg/plugins/<plugin>/tests/`
         - Highly recommended, this will contain tests to validate the functionality of the plugin.
 - Initialize the subproject:
-    - Within `<repo>/<plugin>/`, run `go mod init github.com/opencost/opencost-plugins/<plugin>` and `go get github.com/hashicorp/go-plugin`.
+    - Within `<<repo>/pkg/plugins/<plugin>/`, run `go mod init github.com/opencost/opencost-plugins/pkg/plugins/<plugin>` and `go get github.com/hashicorp/go-plugin`.
 
 ## Design the configuration
 
-All plugins require a configuration. For example, the [Datadog plugin configuration](https://github.com/opencost/opencost-plugins/blob/main/datadog/datadogplugin/datadogconfig.go) takes in some information required to authenticate with the Datadog API. This configuration will be defined by a struct inside `<repo>/<plugin>/<plugin>plugin/`.
+All plugins require a configuration. For example, the [Datadog plugin configuration](https://github.com/opencost/opencost-plugins/blob/main/pkg/plugins/datadog/datadogplugin/datadogconfig.go) takes in some information required to authenticate with the Datadog API. This configuration will be defined by a struct inside `<repo>/pkg/plugins/<plugin>/<plugin>plugin/`.
 
 ## Implement the plugin
 
@@ -51,13 +51,13 @@ Once the configuration is designed, it's time to write the plugin. Within `<repo
         - Optionally (but recommended), implement your response data such that the custom cost extended attributes are utilized as much as possible.
     - [Finally](https://github.com/opencost/opencost-plugins/blob/00809062196b79ce354a5cdafaba1d6ed3f132f9/datadog/cmd/main/main.go#L87), we return the retrieved cost data.
 - Implement the `main` function:
-    - Find the config file ([Datadog reference](https://github.com/opencost/opencost-plugins/blob/main/datadog/cmd/main/main.go#L92)).
-    - Load the config file ([Datadog reference](https://github.com/opencost/opencost-plugins/blob/main/datadog/cmd/main/main.go#L97)).
+    - Find the config file ([Datadog reference](https://github.com/opencost/opencost-plugins/blob/main/pkg/plugins/datadog/cmd/main/main.go#L92)).
+    - Load the config file ([Datadog reference](https://github.com/opencost/opencost-plugins/blob/main/pkg/plugins/datadog/cmd/main/main.go#L97)).
     - Instantiate the plugin source ([Datadog reference](https://github.com/opencost/opencost-plugins/blob/00809062196b79ce354a5cdafaba1d6ed3f132f9/datadog/cmd/main/main.go#L104-L106)).
     - Serve the plugin for consumption by OpenCost ([Datadog reference](https://github.com/opencost/opencost-plugins/blob/00809062196b79ce354a5cdafaba1d6ed3f132f9/datadog/cmd/main/main.go#L110-L118)).
 
 ## Implement tests (highly recommended)
-Write some unit tests to validate the functionality of your new plugin. See the [Datadog unit tests](https://github.com/opencost/opencost-plugins/blob/main/datadog/tests/datadog_test.go) for reference.
+Write some unit tests to validate the functionality of your new plugin. See the [Datadog unit tests](https://github.com/opencost/opencost-plugins/blob/main/pkg/plugins/datadog/tests/datadog_test.go) for reference.
 
 ## Submit it!
 Now that your plugin is implemented and tested, all that's left is to get it submitted for review. Create a PR based off your branch and submit it, and an OpenCost developer will review it for you.
