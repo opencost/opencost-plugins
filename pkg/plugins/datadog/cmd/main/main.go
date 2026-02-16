@@ -233,10 +233,11 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 				}
 			}
 		}
+		nextPageId = ""
 		if resp.Meta != nil && resp.Meta.Pagination != nil && resp.Meta.Pagination.NextRecordId.IsSet() {
-			nextPageId = *resp.Meta.Pagination.NextRecordId.Get()
-		} else {
-			nextPageId = ""
+			if ptr := resp.Meta.Pagination.NextRecordId.Get(); ptr != nil {
+				nextPageId = *ptr
+			}
 		}
 	}
 	allCosts := []*pb.CustomCost{}
