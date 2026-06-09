@@ -1,26 +1,32 @@
 package openaiplugin
 
-type OpenAIUsage struct {
-	Object string      `json:"object"`
-	Data   []UsageData `json:"data"`
+// CompletionsUsageResponse represents GET /v1/organization/usage/completions
+// with group_by=model,project_id
+type CompletionsUsageResponse struct {
+	Object   string                    `json:"object"`
+	Data     []CompletionsTimeBucket   `json:"data"`
+	HasMore  bool                      `json:"has_more"`
+	NextPage string                    `json:"next_page"`
 }
 
-type UsageData struct {
-	OrganizationID            string  `json:"organization_id"`
-	OrganizationName          string  `json:"organization_name"`
-	AggregationTimestamp      int     `json:"aggregation_timestamp"`
-	NRequests                 int     `json:"n_requests"`
-	Operation                 string  `json:"operation"`
-	SnapshotID                string  `json:"snapshot_id"`
-	NContextTokensTotal       int     `json:"n_context_tokens_total"`
-	NGeneratedTokensTotal     int     `json:"n_generated_tokens_total"`
-	Email                     *string `json:"email"`
-	APIKeyID                  *string `json:"api_key_id"`
-	APIKeyName                *string `json:"api_key_name"`
-	APIKeyRedacted            *string `json:"api_key_redacted"`
-	APIKeyType                *string `json:"api_key_type"`
-	ProjectID                 *string `json:"project_id"`
-	ProjectName               *string `json:"project_name"`
-	RequestType               string  `json:"request_type"`
-	NCachedContextTokensTotal int     `json:"n_cached_context_tokens_total"`
+type CompletionsTimeBucket struct {
+	Object    string                     `json:"object"`
+	StartTime int64                      `json:"start_time"`
+	EndTime   int64                      `json:"end_time"`
+	Results   []CompletionsUsageResult   `json:"results"`
+}
+
+type CompletionsUsageResult struct {
+	Object            string  `json:"object"`
+	InputTokens       int     `json:"input_tokens"`
+	OutputTokens      int     `json:"output_tokens"`
+	InputCachedTokens int     `json:"input_cached_tokens"`
+	InputAudioTokens  int     `json:"input_audio_tokens"`
+	OutputAudioTokens int     `json:"output_audio_tokens"`
+	NumModelRequests  int     `json:"num_model_requests"`
+	ProjectID         *string `json:"project_id"`
+	UserID            *string `json:"user_id"`
+	APIKeyID          *string `json:"api_key_id"`
+	Model             *string `json:"model"`
+	Batch             *bool   `json:"batch"`
 }

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -26,21 +26,15 @@ import (
 	"github.com/opencost/opencost/core/pkg/util/timeutil"
 )
 
-// handshakeConfigs are used to just do a basic handshake between
-// a plugin and host. If the handshake fails, a user friendly error is shown.
-// This prevents users from executing bad plugins or executing a plugin
-// directory. It is a UX feature, not a security feature.
 var handshakeConfig = plugin.HandshakeConfig{
 	ProtocolVersion:  1,
 	MagicCookieKey:   "PLUGIN_NAME",
 	MagicCookieValue: "openai",
 }
 
-const openAIUsageURLFmt = "https://api.openai.com/v1/usage?date=%s"
-const openAIBillingURLFmt = "https://api.openai.com/v1/dashboard/billing/usage/export?exclude_project_costs=false&file_format=json&new_endpoint=true&project_id&start_date=%s&end_date=%s"
-const openAIAPIDateFormat = "2006-01-02"
+const openAICostsURL = "https://api.openai.com/v1/organization/costs"
+const openAICompletionsUsageURL = "https://api.openai.com/v1/organization/usage/completions"
 
-// Implementation of CustomCostSource
 type OpenAICostSource struct {
 	rateLimiter *rate.Limiter
 	config      *openaiplugin.OpenAIConfig
@@ -65,7 +59,6 @@ func (d *OpenAICostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Custo
 	}
 
 	for _, target := range targets {
-		// don't allow future request
 		if target.Start().After(time.Now().UTC()) {
 			log.Debugf("skipping future window %v", target)
 			continue
@@ -80,7 +73,6 @@ func (d *OpenAICostSource) GetCustomCosts(req *pb.CustomCostRequest) []*pb.Custo
 }
 
 func main() {
-
 	configFile, err := commonconfig.GetConfigFilePath()
 	if err != nil {
 		log.Fatalf("error opening config file: %v", err)
@@ -91,14 +83,12 @@ func main() {
 		log.Fatalf("error building OpenAI config: %v", err)
 	}
 	log.SetLogLevel(oaiConfig.LogLevel)
-	// rate limit to 1 request per second
 	rateLimiter := rate.NewLimiter(0.5, 1)
 	oaiCostSrc := OpenAICostSource{
 		rateLimiter: rateLimiter,
 		config:      oaiConfig,
 	}
 
-	// pluginMap is the map of plugins we can dispense.
 	var pluginMap = map[string]plugin.Plugin{
 		"CustomCostSource": &ocplugin.CustomCostPlugin{Impl: &oaiCostSrc},
 	}
@@ -123,177 +113,249 @@ func boilerplateOpenAICustomCost(win opencost.Window) pb.CustomCostResponse {
 		Costs:      []*pb.CustomCost{},
 	}
 }
+
 func (d *OpenAICostSource) getOpenAICostsForWindow(window opencost.Window) *pb.CustomCostResponse {
 	ccResp := boilerplateOpenAICustomCost(window)
 
-	oaiTokenUsages, err := d.getOpenAITokenUsages(*window.Start())
+	costsResp, err := d.getOpenAICosts(*window.Start(), *window.End())
 	if err != nil {
-		ccResp.Errors = append(ccResp.Errors, fmt.Sprintf("error getting OpenAI token usages: %v", err))
+		ccResp.Errors = append(ccResp.Errors, fmt.Sprintf("error getting OpenAI costs: %v", err))
 	}
 
-	oaiBilling, err := d.getOpenAIBilling(*window.Start(), *window.End())
+	usageResp, err := d.getOpenAICompletionsUsage(*window.Start(), *window.End())
 	if err != nil {
-		ccResp.Errors = append(ccResp.Errors, fmt.Sprintf("error getting OpenAI billing data: %v", err))
+		ccResp.Errors = append(ccResp.Errors, fmt.Sprintf("error getting OpenAI usage: %v", err))
 	}
 
-	customCosts, err := getCustomCostsFromUsageAndBilling(oaiTokenUsages, oaiBilling)
-	if err != nil {
-		ccResp.Errors = append(ccResp.Errors, fmt.Sprintf("error converting API responses into custom costs: %v", err))
-	}
+	customCosts := buildCustomCosts(costsResp, usageResp)
 	ccResp.Costs = customCosts
 
 	return &ccResp
 }
 
-func getCustomCostsFromUsageAndBilling(usage *openaiplugin.OpenAIUsage, billing *openaiplugin.OpenAIBilling) ([]*pb.CustomCost, error) {
-	customCosts := []*pb.CustomCost{}
-
+// buildCustomCosts merges cost data (dollar amounts per line_item/project) with
+// usage data (token counts per model/project) into FOCUS-compliant CustomCost entries.
+//
+// The costs API groups by line_item (e.g. "GPT-4o", "Embeddings") and project_id.
+// The usage API groups by model (e.g. "gpt-4o-2024-08-06") and project_id.
+// We use the costs response as the primary source of truth for billed amounts, and
+// attach token counts where we can match on a normalized model/line_item key.
+func buildCustomCosts(costs *openaiplugin.CostsResponse, usage *openaiplugin.CompletionsUsageResponse) []*pb.CustomCost {
 	tokenMap := buildTokenMap(usage)
-	for _, billingEntry := range billing.Data {
-		tokenMapKey := strings.ReplaceAll(strings.ToLower(billingEntry.Name), "-", "")
-		tokenMapKey = strings.ReplaceAll(tokenMapKey, " ", "")
-		tokenMapKey = strings.ReplaceAll(tokenMapKey, "_", "")
+	var customCosts []*pb.CustomCost
 
-		tokenCount, ok := tokenMap[tokenMapKey]
-		if !ok {
-			log.Debugf("no token usage found for %s", billingEntry.Name)
-			tokenCount = -1
-		}
-
-		extendedAttrs := pb.CustomCostExtendedAttributes{
-			AccountId:    &billingEntry.OrganizationID,
-			SubAccountId: &billingEntry.ProjectID,
-		}
-		customCost := pb.CustomCost{
-			BilledCost:         float32(billingEntry.CostInMajor),
-			AccountName:        billingEntry.OrganizationName,
-			ChargeCategory:     "Usage",
-			Description:        fmt.Sprintf("OpenAI usage for model %s", billingEntry.Name),
-			ResourceName:       billingEntry.Name,
-			ResourceType:       "AI Model",
-			Id:                 uuid.New().String(),
-			ProviderId:         fmt.Sprintf("%s/%s/%s", billingEntry.OrganizationID, billingEntry.ProjectID, billingEntry.Name),
-			UsageQuantity:      float32(tokenCount),
-			UsageUnit:          "tokens - All snapshots, all projects",
-			ExtendedAttributes: &extendedAttrs,
-		}
-
-		customCosts = append(customCosts, &customCost)
+	if costs == nil {
+		return customCosts
 	}
 
-	return customCosts, nil
+	for _, bucket := range costs.Data {
+		for _, result := range bucket.Results {
+			lineItem := derefStr(result.LineItem, "Unknown")
+			projectID := derefStr(result.ProjectID, "")
+			cost := result.Amount.Value
+
+			if cost == 0 {
+				log.Debugf("skipping zero-cost line item %s", lineItem)
+				continue
+			}
+
+			tokenKey := normalizeModelKey(lineItem) + "|" + projectID
+			tokenCount, hasTokens := tokenMap[tokenKey]
+			if !hasTokens {
+				tokenKeyNoProject := normalizeModelKey(lineItem) + "|"
+				tokenCount, hasTokens = tokenMap[tokenKeyNoProject]
+			}
+
+			usageQty := float32(-1)
+			if hasTokens {
+				usageQty = float32(tokenCount)
+			}
+
+			extendedAttrs := pb.CustomCostExtendedAttributes{
+				SubAccountId: strPtr(projectID),
+			}
+			cc := pb.CustomCost{
+				BilledCost:         float32(cost),
+				ChargeCategory:     "Usage",
+				Description:        fmt.Sprintf("OpenAI usage for %s", lineItem),
+				ResourceName:       lineItem,
+				ResourceType:       "AI Model",
+				Id:                 uuid.New().String(),
+				ProviderId:         fmt.Sprintf("%s/%s", projectID, lineItem),
+				UsageQuantity:      usageQty,
+				UsageUnit:          "tokens",
+				ExtendedAttributes: &extendedAttrs,
+			}
+
+			customCosts = append(customCosts, &cc)
+		}
+	}
+
+	return customCosts
 }
 
-var snapshotRe = regexp.MustCompile(`-\d{4}-\d{2}-\d{2}|-`)
-
-func buildTokenMap(usage *openaiplugin.OpenAIUsage) map[string]int {
+// buildTokenMap aggregates token counts from the completions usage response,
+// keyed by normalizedModel|projectID.
+func buildTokenMap(usage *openaiplugin.CompletionsUsageResponse) map[string]int {
 	tokenMap := make(map[string]int)
 	if usage == nil {
 		return tokenMap
 	}
-	for _, usageData := range usage.Data {
-		key := snapshotRe.ReplaceAllString(usageData.SnapshotID, "")
-		key = strings.ToLower(key)
-		if _, ok := tokenMap[key]; !ok {
-			tokenMap[key] = 0
+	for _, bucket := range usage.Data {
+		for _, result := range bucket.Results {
+			model := derefStr(result.Model, "unknown")
+			projectID := derefStr(result.ProjectID, "")
+			key := normalizeModelKey(model) + "|" + projectID
+			tokenMap[key] += result.InputTokens + result.OutputTokens
 		}
-
-		tokenMap[key] += (usageData.NGeneratedTokensTotal + usageData.NContextTokensTotal)
 	}
 	return tokenMap
 }
 
-func (d *OpenAICostSource) getOpenAIBilling(start time.Time, end time.Time) (*openaiplugin.OpenAIBilling, error) {
-	client := &http.Client{}
-	openAIBillingURL := fmt.Sprintf(openAIBillingURLFmt, start.Format(openAIAPIDateFormat), end.Format(openAIAPIDateFormat))
-	log.Debugf("fetching OpenAI billing data from %s", openAIBillingURL)
-	var errReq error
-	var resp *http.Response
-	for i := 0; i < 3; i++ {
-		err := d.rateLimiter.Wait(context.Background())
-		if err != nil {
-			log.Warnf("error waiting for rate limiter: %v", err)
-			return nil, fmt.Errorf("error waiting for rate limiter: %v", err)
+// normalizeModelKey strips date suffixes, dashes, spaces, underscores, and lowercases
+// so that "GPT-4o mini" and "gpt-4o-mini-2024-07-18" both map to "gpt4omini".
+func normalizeModelKey(s string) string {
+	s = strings.ToLower(s)
+	// strip trailing date suffix like "-2024-07-18" (11 chars: dash + YYYY-MM-DD)
+	if len(s) > 11 {
+		candidate := s[len(s)-10:]
+		if s[len(s)-11] == '-' && isDateLike(candidate) {
+			s = s[:len(s)-11]
 		}
-		var req *http.Request
-		req, errReq = http.NewRequest("GET", openAIBillingURL, nil)
-		if errReq != nil {
-			log.Warnf("error creating billing export request: %v", errReq)
-			log.Infof("retrying request after 30s")
-			time.Sleep(30 * time.Second)
-			continue
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", d.config.APIKey))
-
-		resp, errReq = client.Do(req)
-		if errReq != nil {
-			log.Warnf("error doing billing export request: %v", errReq)
-			log.Warnf("retrying requestafter 30s")
-			time.Sleep(30 * time.Second)
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			bodyBytes, err := io.ReadAll(resp.Body)
-			bodyString := "<empty>"
-			if err != nil {
-				log.Warnf("error reading body of non-200 response: %v", err)
-			} else {
-				bodyString = string(bodyBytes)
-			}
-
-			errReq = fmt.Errorf("received non-200 response for billing export request: %d", resp.StatusCode)
-			log.Warnf("got non-200 response for billing export request: %d, body is: %s", resp.StatusCode, bodyString)
-			log.Infof("retrying request after 30s")
-			time.Sleep(30 * time.Second)
-			continue
-		} else {
-			errReq = nil
-		}
-		// request was successful, break out of loop
-		break
 	}
-
-	if errReq != nil {
-		return nil, fmt.Errorf("error making request after retries: %v", errReq)
-	}
-	var billingData openaiplugin.OpenAIBilling
-	if err := json.NewDecoder(resp.Body).Decode(&billingData); err != nil {
-		return nil, fmt.Errorf("error decoding billing export response: %v", err)
-	}
-	resp.Body.Close()
-	for i := range billingData.Data {
-		asFloat, err := strconv.ParseFloat(billingData.Data[i].CostInMajorStr, 64)
-		if err != nil {
-			return nil, fmt.Errorf("error parsing cost: %v", err)
-		}
-		billingData.Data[i].CostInMajor = asFloat
-	}
-
-	return &billingData, nil
+	s = strings.ReplaceAll(s, "-", "")
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, "_", "")
+	return s
 }
 
-func (d *OpenAICostSource) getOpenAITokenUsages(targetTime time.Time) (*openaiplugin.OpenAIUsage, error) {
-	client := &http.Client{}
-
-	openAIUsageURL := fmt.Sprintf(openAIUsageURLFmt, targetTime.Format(openAIAPIDateFormat))
-	log.Debugf("fetching OpenAI usage data from %s", openAIUsageURL)
-	var errReq error
-	var resp *http.Response
-	for i := 0; i < 3; i++ {
-		errReq = nil
-		err := d.rateLimiter.Wait(context.Background())
-		if err != nil {
-			log.Warnf("error waiting for rate limiter: %v", err)
-			return nil, fmt.Errorf("error waiting for rate limiter: %v", err)
+func isDateLike(s string) bool {
+	if len(s) != 10 {
+		return false
+	}
+	for i, c := range s {
+		if i == 4 || i == 7 {
+			if c != '-' {
+				return false
+			}
+		} else if c < '0' || c > '9' {
+			return false
 		}
-		var req *http.Request
-		req, errReq = http.NewRequest("GET", openAIUsageURL, nil)
-		if errReq != nil {
-			log.Warnf("error creating usage request: %v", errReq)
-			log.Warnf("retrying request after 30s")
+	}
+	return true
+}
+
+func derefStr(p *string, fallback string) string {
+	if p != nil {
+		return *p
+	}
+	return fallback
+}
+
+func strPtr(s string) *string {
+	return &s
+}
+
+// getOpenAICosts fetches cost data from /v1/organization/costs grouped by
+// line_item and project_id. Handles pagination.
+func (d *OpenAICostSource) getOpenAICosts(start, end time.Time) (*openaiplugin.CostsResponse, error) {
+	params := url.Values{}
+	params.Set("start_time", strconv.FormatInt(start.Unix(), 10))
+	params.Set("end_time", strconv.FormatInt(end.Unix(), 10))
+	params.Set("bucket_width", "1d")
+	params.Set("limit", "31")
+	params.Add("group_by", "line_item")
+	params.Add("group_by", "project_id")
+
+	var allBuckets []openaiplugin.CostsTimeBucket
+	page := ""
+
+	for {
+		if page != "" {
+			params.Set("page", page)
+		}
+
+		fullURL := openAICostsURL + "?" + params.Encode()
+		log.Debugf("fetching OpenAI costs from %s", fullURL)
+
+		body, err := d.doRequestWithRetry("GET", fullURL)
+		if err != nil {
+			return nil, fmt.Errorf("costs request failed: %w", err)
+		}
+
+		var resp openaiplugin.CostsResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil, fmt.Errorf("error decoding costs response: %w", err)
+		}
+
+		allBuckets = append(allBuckets, resp.Data...)
+
+		if !resp.HasMore || resp.NextPage == "" {
+			break
+		}
+		page = resp.NextPage
+	}
+
+	return &openaiplugin.CostsResponse{Data: allBuckets}, nil
+}
+
+// getOpenAICompletionsUsage fetches token usage from /v1/organization/usage/completions
+// grouped by model and project_id. Handles pagination.
+func (d *OpenAICostSource) getOpenAICompletionsUsage(start, end time.Time) (*openaiplugin.CompletionsUsageResponse, error) {
+	params := url.Values{}
+	params.Set("start_time", strconv.FormatInt(start.Unix(), 10))
+	params.Set("end_time", strconv.FormatInt(end.Unix(), 10))
+	params.Set("bucket_width", "1d")
+	params.Set("limit", "31")
+	params.Add("group_by", "model")
+	params.Add("group_by", "project_id")
+
+	var allBuckets []openaiplugin.CompletionsTimeBucket
+	page := ""
+
+	for {
+		if page != "" {
+			params.Set("page", page)
+		}
+
+		fullURL := openAICompletionsUsageURL + "?" + params.Encode()
+		log.Debugf("fetching OpenAI completions usage from %s", fullURL)
+
+		body, err := d.doRequestWithRetry("GET", fullURL)
+		if err != nil {
+			return nil, fmt.Errorf("completions usage request failed: %w", err)
+		}
+
+		var resp openaiplugin.CompletionsUsageResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil, fmt.Errorf("error decoding completions usage response: %w", err)
+		}
+
+		allBuckets = append(allBuckets, resp.Data...)
+
+		if !resp.HasMore || resp.NextPage == "" {
+			break
+		}
+		page = resp.NextPage
+	}
+
+	return &openaiplugin.CompletionsUsageResponse{Data: allBuckets}, nil
+}
+
+// doRequestWithRetry performs an authenticated GET with up to 3 retries on failure.
+func (d *OpenAICostSource) doRequestWithRetry(method, fullURL string) ([]byte, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := d.rateLimiter.Wait(context.Background()); err != nil {
+			return nil, fmt.Errorf("rate limiter error: %w", err)
+		}
+
+		req, err := http.NewRequest(method, fullURL, nil)
+		if err != nil {
+			lastErr = fmt.Errorf("error creating request: %w", err)
+			log.Warnf("%v, retrying in 30s", lastErr)
 			time.Sleep(30 * time.Second)
 			continue
 		}
@@ -301,45 +363,34 @@ func (d *OpenAICostSource) getOpenAITokenUsages(targetTime time.Time) (*openaipl
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", d.config.APIKey))
 
-		resp, errReq = client.Do(req)
-		if errReq != nil {
-			log.Warnf("error doing token request: %v", errReq)
-			log.Infof("retrying request after 30s")
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("request failed: %w", err)
+			log.Warnf("%v, retrying in 30s", lastErr)
 			time.Sleep(30 * time.Second)
 			continue
 		}
-		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("error reading response body: %w", err)
+			log.Warnf("%v, retrying in 30s", lastErr)
+			time.Sleep(30 * time.Second)
+			continue
+		}
 
 		if resp.StatusCode != http.StatusOK {
-			errReq = fmt.Errorf("received non-200 response for token usage request: %d", resp.StatusCode)
-			bodyBytes, err := io.ReadAll(resp.Body)
-			bodyString := "<empty>"
-			if err != nil {
-				log.Warnf("error reading body of non-200 response: %v", err)
-			} else {
-				bodyString = string(bodyBytes)
-			}
-			log.Warnf("got non-200 response for token usage request: %d, body is: %s", resp.StatusCode, bodyString)
-			log.Infof("retrying request after 30s")
+			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body[:min(len(body), 500)]))
+			log.Warnf("non-200 response: %v, retrying in 30s", lastErr)
 			time.Sleep(30 * time.Second)
 			continue
-		} else {
-			errReq = nil
 		}
-		// request was successful, break out of loop
-		break
+
+		return body, nil
 	}
 
-	if errReq != nil {
-		return nil, fmt.Errorf("error making request after retries: %v", errReq)
-	}
-
-	var usageData openaiplugin.OpenAIUsage
-	if err := json.NewDecoder(resp.Body).Decode(&usageData); err != nil {
-		return nil, fmt.Errorf("error decoding response: %v", err)
-	}
-
-	return &usageData, nil
+	return nil, fmt.Errorf("request failed after 3 attempts: %w", lastErr)
 }
 
 func getOpenAIConfig(configFilePath string) (*openaiplugin.OpenAIConfig, error) {
