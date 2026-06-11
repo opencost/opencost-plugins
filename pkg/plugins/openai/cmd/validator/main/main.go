@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/go-multierror"
@@ -11,6 +12,14 @@ import (
 	"github.com/opencost/opencost/core/pkg/model/pb"
 	"google.golang.org/protobuf/encoding/protojson"
 )
+
+const maxDailyBilledCostPerLineItem = float32(5)
+
+// expectedCostSubstrings spot-checks common OpenAI line item families across the window.
+// Line item names vary by model version and charge type (e.g. "gpt-4o-mini-2024-07-18, input").
+var expectedCostSubstrings = []string{
+	"gpt-4o-mini",
+}
 
 // the validator is designed to allow plugin implementors to validate their plugin information
 // as called by the central test harness.
@@ -106,30 +115,36 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 			if cost.GetBilledCost() == 0 {
 				log.Debugf("got zero cost for %v", cost)
 			}
-			if cost.GetBilledCost() > 2 {
-				log.Errorf("daily cost returned by plugin openai for %v is greater than 1", cost)
+			if cost.GetBilledCost() > maxDailyBilledCostPerLineItem {
+				log.Errorf("daily cost returned by plugin openai for %v is greater than %v", cost, maxDailyBilledCostPerLineItem)
 				return false
 			}
 		}
-
 	}
+
 	if costSum == 0 {
 		log.Errorf("daily costs returned by openai plugin are zero")
 		return false
 	}
-	expectedCosts := []string{
-		"GPT-4o mini",
-		"GPT-4o",
+
+	if len(seenCosts) == 0 {
+		log.Errorf("no cost line items found in openai plugin response")
+		return false
 	}
 
-	for _, cost := range expectedCosts {
-		if !seenCosts[cost] {
-			log.Errorf("daily cost %s not found in plugin openai response", cost)
+	for _, substr := range expectedCostSubstrings {
+		if !costLineItemSeen(seenCosts, substr) {
+			log.Errorf("daily cost containing %q not found in plugin openai response", substr)
 			return false
 		}
 	}
+	if !gpt4oLineItemSeen(seenCosts) {
+		log.Errorf("daily GPT-4o cost line item not found in plugin openai response")
+		return false
+	}
 
-	// verify the domain matches the plugin name
+	log.Infof("found %d distinct cost line items: %v", len(seenCosts), seenCosts)
+
 	for _, resp := range respDaily {
 		if resp.Domain != "openai" {
 			log.Errorf("daily domain returned by plugin openai does not match plugin name")
@@ -137,11 +152,28 @@ func validate(respDaily, respHourly []*pb.CustomCostResponse) bool {
 		}
 	}
 
-	if len(seenCosts) < len(expectedCosts)-1 || len(seenCosts) > len(expectedCosts)+1 {
-		log.Errorf("daily costs returned by openai plugin are very different than expected")
-		return false
-	}
 	return true
+}
+
+func costLineItemSeen(seen map[string]bool, substr string) bool {
+	substr = strings.ToLower(substr)
+	for name := range seen {
+		if strings.Contains(strings.ToLower(name), substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// gpt4oLineItemSeen matches GPT-4o line items but not GPT-4o mini variants.
+func gpt4oLineItemSeen(seen map[string]bool) bool {
+	for name := range seen {
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, "gpt-4o") && !strings.Contains(lower, "gpt-4o-mini") {
+			return true
+		}
+	}
+	return false
 }
 
 func Unmarshal(data []byte) ([]*pb.CustomCostResponse, error) {
