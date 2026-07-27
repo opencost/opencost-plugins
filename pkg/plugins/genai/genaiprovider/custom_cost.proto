@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package genaiprovider;
+
+option go_package = "github.com/nXtCyberNet/opencost-plugins/pkg/plugins/genai/genaiprovider";
+
+service CustomCostSource {
+    rpc GetCustomCosts (GetCustomCostsRequest) returns (GetCustomCostsResponse);
+}
+
+// Mirror of your EfficiencyMetrics struct
+message EfficiencyMetrics {
+    double cost_per_1m_input = 1;
+    double cost_per_1m_output = 2;
+    double cost_per_1m_total = 3;
+    double tokens_per_gpu_sec = 4;
+    double cache_savings = 5;
+    double gpu_util_percent = 6;
+    double gpu_waste = 7;
+    string efficiency_status = 8;
+    double mig_utilization = 9;
+    double unallocated_cost = 10;
+}
+
+// Mirror of your GenAIAttributes struct
+message GenAIAttributes {
+    string workflow_phase = 1;
+    string model_name = 2;
+    string model_version = 3;
+    string tenant_id = 4;
+    string accelerator = 5;
+    string gpu_uuid = 6;
+}
+
+// The main response object
+message GenAIWorkload {
+    string pod_name = 1;
+    string model_name = 2;
+    int64 total_tokens = 3;
+    double total_cost = 4;
+    string tenant_id = 5;
+    string workflow_phase = 6;
+    string mig_profile = 7;
+    double gpu_efficiency = 8;
+    
+    // Nesting your detailed sub-structs
+    EfficiencyMetrics efficiency = 9;
+    GenAIAttributes attributes = 10;
+}
+
+message GetCustomCostsRequest {
+    int64 start = 1;
+    int64 end = 2;
+}
+
+message GetCustomCostsResponse {
+    repeated GenAIWorkload workloads = 1;
+}

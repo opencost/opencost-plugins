@@ -1,0 +1,4 @@
+{
+  "prometheusUrl": "http://your-prometheus-endpoint:9090",
+  "metrics": { "inputTokensMetric": "genai_input_tokens_total" }
+}

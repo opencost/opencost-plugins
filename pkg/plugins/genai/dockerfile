@@ -1,0 +1,5 @@
+FROM debian:bookworm-slim
+WORKDIR /app
+COPY genai-plugin /app/genai-plugin
+RUN chmod +x /app/genai-plugin
+ENTRYPOINT ["/app/genai-plugin"]

@@ -1,0 +1,5 @@
+{
+  "prometheus_url": "http://prometheus:9090",
+  "cluster_id": "test-cluster",
+  "log_level": "info"
+}
