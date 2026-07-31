@@ -233,7 +233,10 @@ func (d *DatadogCostSource) getDDCostsForWindow(window opencost.Window, listPric
 				}
 			}
 		}
-		if resp.Meta != nil && resp.Meta.Pagination != nil && resp.Meta.Pagination.NextRecordId.IsSet() {
+		// NextRecordId is a NullableString: IsSet() is true even when the API
+		// returned an explicit JSON null (end of pagination), in which case
+		// Get() returns nil. Guard against that to avoid a SIGSEGV (#68).
+		if resp.Meta != nil && resp.Meta.Pagination != nil && resp.Meta.Pagination.NextRecordId.IsSet() && resp.Meta.Pagination.NextRecordId.Get() != nil {
 			nextPageId = *resp.Meta.Pagination.NextRecordId.Get()
 		} else {
 			nextPageId = ""
@@ -468,6 +471,16 @@ func getDatadogClients(config datadogplugin.DatadogConfig) (context.Context, *da
 	)
 
 	configuration := datadog.NewConfiguration()
+	// The generated client serializes the billable-summary `month` parameter
+	// as a full RFC3339 timestamp, which the Datadog API rejects with
+	// 400 "month must be in the format YYYY-MM". Rewrite it in transit.
+	var baseTransport _nethttp.RoundTripper = _nethttp.DefaultTransport
+	if configuration.HTTPClient != nil && configuration.HTTPClient.Transport != nil {
+		baseTransport = configuration.HTTPClient.Transport
+	}
+	configuration.HTTPClient = &_nethttp.Client{
+		Transport: datadogplugin.MonthParamRoundTripper{Next: baseTransport},
+	}
 	apiClient := datadog.NewAPIClient(configuration)
 	usageAPI := datadogV2.NewUsageMeteringApi(apiClient)
 	v1UsageAPI := datadogV1.NewUsageMeteringApi(apiClient)
