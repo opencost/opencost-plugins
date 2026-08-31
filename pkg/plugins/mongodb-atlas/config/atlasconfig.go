@@ -7,10 +7,12 @@ import (
 )
 
 type AtlasConfig struct {
-	PublicKey  string `json:"atlas_public_key"`
-	PrivateKey string `json:"atlas_private_key"`
-	OrgID      string `json:"atlas_org_id"`
-	LogLevel   string `json:"atlas_plugin_log_level"`
+	PublicKey       string `json:"atlas_public_key"`
+	PrivateKey      string `json:"atlas_private_key"`
+	OrgID           string `json:"atlas_org_id"`
+	LogLevel        string `json:"atlas_plugin_log_level"`
+	TargetCurrency  string `json:"target_currency"`
+	ExchangeAPIKey  string `json:"exchange_api_key"`
 }
 
 func GetAtlasConfig(configFilePath string) (*AtlasConfig, error) {
@@ -26,6 +28,10 @@ func GetAtlasConfig(configFilePath string) (*AtlasConfig, error) {
 
 	if result.LogLevel == "" {
 		result.LogLevel = "info"
+	}
+
+	if result.TargetCurrency == "" {
+		result.TargetCurrency = "USD"
 	}
 
 	return &result, nil
