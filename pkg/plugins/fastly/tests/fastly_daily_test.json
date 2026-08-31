@@ -1,0 +1,53 @@
+[
+  {
+    "metadata": {
+      "api_client_version": "v3"
+    },
+    "costSource": "billing",
+    "domain": "fastly",
+    "version": "v1",
+    "currency": "USD",
+    "start": "2025-07-01T00:00:00Z",
+    "end": "2025-07-02T00:00:00Z",
+    "costs": [
+      {
+        "zone": "North America",
+        "accountName": "test-customer-123",
+        "chargeCategory": "usage",
+        "description": "CDN Bandwidth Usage",
+        "resourceName": "bandwidth",
+        "resourceType": "Full Site Delivery",
+        "id": "inv-test-001",
+        "providerId": "inv-test-001/Full Site Delivery/bandwidth",
+        "billedCost": 75.5,
+        "listCost": 75.5,
+        "listUnitPrice": 0.12,
+        "usageQuantity": 629.17,
+        "usageUnit": "GB",
+        "labels": {
+          "product_line": "CDN",
+          "product_name": "Full Site Delivery"
+        }
+      },
+      {
+        "zone": "Global",
+        "accountName": "test-customer-123",
+        "chargeCategory": "usage",
+        "description": "Edge Compute Usage",
+        "resourceName": "compute_time",
+        "resourceType": "Compute",
+        "id": "inv-test-001",
+        "providerId": "inv-test-001/Compute@Edge/compute_time",
+        "billedCost": 50,
+        "listCost": 50,
+        "listUnitPrice": 1,
+        "usageQuantity": 50,
+        "usageUnit": "hours",
+        "labels": {
+          "product_line": "Edge Compute",
+          "product_name": "Compute@Edge"
+        }
+      }
+    ]
+  }
+]

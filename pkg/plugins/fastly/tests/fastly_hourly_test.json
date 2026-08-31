@@ -1,0 +1,34 @@
+[
+  {
+    "metadata": {
+      "api_client_version": "v3"
+    },
+    "costSource": "billing",
+    "domain": "fastly",
+    "version": "v1",
+    "currency": "USD",
+    "start": "2025-07-01T00:00:00Z",
+    "end": "2025-07-01T01:00:00Z",
+    "costs": [
+      {
+        "zone": "North America",
+        "accountName": "test-customer-123",
+        "chargeCategory": "usage",
+        "description": "CDN Bandwidth Usage - Hourly",
+        "resourceName": "bandwidth",
+        "resourceType": "Full Site Delivery",
+        "id": "inv-test-hourly-001",
+        "providerId": "inv-test-hourly-001/Full Site Delivery/bandwidth",
+        "billedCost": 3.15,
+        "listCost": 3.15,
+        "listUnitPrice": 0.12,
+        "usageQuantity": 26.25,
+        "usageUnit": "GB",
+        "labels": {
+          "product_line": "CDN",
+          "product_name": "Full Site Delivery"
+        }
+      }
+    ]
+  }
+]
