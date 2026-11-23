@@ -226,6 +226,38 @@ func TestExpiredStaticTokenReportsReason(t *testing.T) {
 	}
 }
 
+// TestGetCustomCostsTreatsNoContentAsNoUsage reproduces a real account with
+// no usage yet in the month: usage/download answers 204 with an empty body.
+func TestGetCustomCostsTreatsNoContentAsNoUsage(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	source := DatabricksCostSource{
+		client: server.Client(),
+		config: &databricksplugin.DatabricksConfig{AccountID: "abc-123", Token: "t", AccountAPIBaseURL: server.URL},
+	}
+
+	resp := source.GetCustomCosts(customCostRequest())
+	if len(resp) != 2 {
+		t.Fatalf("expected two responses, got %d", len(resp))
+	}
+	for _, r := range resp {
+		if len(r.Errors) != 0 {
+			t.Fatalf("expected no errors for an empty month, got %v", r.Errors)
+		}
+		if len(r.Costs) != 0 {
+			t.Fatalf("expected no costs, got %d", len(r.Costs))
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("expected the empty month to be cached, got %d requests", requests)
+	}
+}
+
 func customCostRequest() *pb.CustomCostRequest {
 	windowStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	windowEnd := time.Date(2026, 5, 3, 0, 0, 0, 0, time.UTC)

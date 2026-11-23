@@ -227,6 +227,13 @@ func (d *DatabricksCostSource) downloadUsage(month string) (records []usageRecor
 	}
 	defer resp.Body.Close()
 
+	// Databricks answers 204 No Content when the account has no usage in
+	// the requested month (for example a new account, or the first days
+	// of a month). That is an empty result, not an error.
+	if resp.StatusCode == http.StatusNoContent {
+		return []usageRecord{}, false, nil
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, readErr := io.ReadAll(resp.Body)
 		bodyString := "<empty>"

@@ -102,4 +102,6 @@ SKU names on GCP (and in some regions elsewhere) include a region suffix, for ex
 
 Serverless usage (SQL warehouses, notebooks, jobs, pipelines and model serving) is included in the usage download. Pipeline usage is billed under the jobs serverless SKU and is identified by its `dlt-execution-*` cluster name.
 
+A month without usage (HTTP 204 from the API) is reported as no costs, not as an error.
+
 Only daily resolution is supported. The plugin requests monthly CSV exports because Databricks exposes the account billable usage download API with `start_month` and `end_month` parameters.
