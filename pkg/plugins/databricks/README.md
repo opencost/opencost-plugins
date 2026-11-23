@@ -87,12 +87,19 @@ Databricks usage downloads provide usage quantity by SKU, while actual pricing v
 
 ## Cost Mapping
 
-- `usage_quantity` and `usage_unit` -> usage quantity and unit
-- configured SKU unit price multiplied by `usage_quantity` -> billed and list cost
+- `dbus` / `usage_quantity` -> usage quantity, in unit `DBU` unless the CSV has a unit column
+- configured SKU unit price -> list unit price; price multiplied by usage -> billed and list cost
 - `account_id` -> account name and account ID
-- `workspace_id` -> sub-account ID
-- `billing_origin_product` or `usage_type` -> service and resource type
-- `sku_name` -> SKU ID
-- `record_id` -> provider ID
+- `workspaceId` -> sub-account ID
+- `billing_origin_product`, `usage_type` or `sku` -> service and resource type
+- `sku` -> SKU ID
+- `clusterCustomTags` -> cost metadata (for example `JobId`, `NotebookId`, `SqlEndpointId`, `ai.model_family`)
+- resource name -> the most specific workload identifier available. For serverless usage `clusterId` is usually empty, so it comes from the tags:
+  `model/<family>`, `job/<id>`, `notebook/<id>`, `sql-warehouse/<id>`, `pipeline/<clusterName>` for `dlt-execution-*`, then `clusterId`, then `serverless-<workload>/<workspace>` or `model-serving/<workspace>`, then the workspace ID
+- `record_id` -> provider ID when present. The legacy CSV has none, and several rows can share workspace, SKU and hour (often with an empty `clusterId`), so the provider ID includes a stable hash of the row.
+
+SKU names on GCP (and in some regions elsewhere) include a region suffix, for example `PREMIUM_SERVERLESS_SQL_COMPUTE_US_IOWA`. Keys in `sku_unit_prices` must match exactly. To get your list prices per SKU, query `system.billing.list_prices` (column `pricing.default`).
+
+Serverless usage (SQL warehouses, notebooks, jobs, pipelines and model serving) is included in the usage download. Pipeline usage is billed under the jobs serverless SKU and is identified by its `dlt-execution-*` cluster name.
 
 Only daily resolution is supported. The plugin requests monthly CSV exports because Databricks exposes the account billable usage download API with `start_month` and `end_month` parameters.

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -63,6 +66,13 @@ type usageRecord struct {
 	JobID                string
 	WarehouseID          string
 	InstancePoolID       string
+	ClusterName          string
+	// Tags holds clusterCustomTags (legacy CSV) parsed from JSON.
+	Tags map[string]string
+	// RowKey uniquely and deterministically identifies the CSV row. The
+	// legacy CSV has no record ID and rows can be identical except for
+	// dbus, so it is a hash of the whole row plus an occurrence counter.
+	RowKey string
 }
 
 func main() {
@@ -275,6 +285,7 @@ func parseUsageCSV(reader io.Reader) ([]usageRecord, error) {
 
 	headerIndex := buildHeaderIndex(rows[0])
 	records := []usageRecord{}
+	seen := map[string]int{}
 	for rowNumber, row := range rows[1:] {
 		quantity, err := parseFloatField(getCSVField(row, headerIndex, "usage_quantity", "dbus", "dbu"))
 		if err != nil {
@@ -300,6 +311,9 @@ func parseUsageCSV(reader io.Reader) ([]usageRecord, error) {
 			JobID:                getCSVField(row, headerIndex, "usage_metadata.job_id", "job_id", "jobid"),
 			WarehouseID:          getCSVField(row, headerIndex, "usage_metadata.warehouse_id", "warehouse_id", "warehouseid"),
 			InstancePoolID:       getCSVField(row, headerIndex, "usage_metadata.instance_pool_id", "instance_pool_id", "instancepoolid"),
+			ClusterName:          getCSVField(row, headerIndex, "clusterName", "cluster_name"),
+			Tags:                 parseTags(getCSVField(row, headerIndex, "clusterCustomTags", "custom_tags", "tags")),
+			RowKey:               rowKey(row, seen),
 		}
 		records = append(records, record)
 	}
@@ -372,11 +386,12 @@ func databricksUsageToCustomCosts(config *databricksplugin.DatabricksConfig, rec
 		unitPrice := unitPriceForSKU(config, record.SKUName)
 		billedCost := float32(record.UsageQuantity * unitPrice)
 		usageQuantity := float32(record.UsageQuantity)
+		listUnitPrice := float32(unitPrice)
+		usageUnit := firstNonEmpty(record.UsageUnit, defaultUsageUnit)
 		provider := "Databricks"
-		resourceID := firstNonEmpty(record.ClusterID, record.JobID, record.WarehouseID, record.InstancePoolID, record.WorkspaceID)
-		resourceName := firstNonEmpty(resourceID, record.WorkspaceName, record.SKUName, "Databricks usage")
+		resourceName := firstNonEmpty(resourceNameForRecord(record), record.WorkspaceName, record.SKUName, "Databricks usage")
 		serviceName := firstNonEmpty(record.BillingOriginProduct, record.UsageType, record.SKUName, "Databricks")
-		providerID := firstNonEmpty(record.RecordID, strings.Join(compact([]string{record.AccountID, record.WorkspaceID, record.SKUName, record.UsageStartTime, record.UsageDate}), "/"), uuid.New().String())
+		providerID := firstNonEmpty(record.RecordID, providerIDForRecord(record), uuid.New().String())
 		chargeCategory := "Usage"
 		if strings.EqualFold(record.RecordType, "RETRACTION") || record.UsageQuantity < 0 {
 			chargeCategory = "Adjustment"
@@ -397,7 +412,7 @@ func databricksUsageToCustomCosts(config *databricksplugin.DatabricksConfig, rec
 			SubAccountId:       optionalString(record.WorkspaceID),
 			SubAccountName:     optionalString(record.WorkspaceName),
 			PricingQuantity:    &usageQuantity,
-			PricingUnit:        optionalString(record.UsageUnit),
+			PricingUnit:        optionalString(usageUnit),
 			PricingCategory:    optionalString(record.Cloud),
 		}
 
@@ -411,8 +426,10 @@ func databricksUsageToCustomCosts(config *databricksplugin.DatabricksConfig, rec
 			ResourceType:       serviceName,
 			Id:                 uuid.New().String(),
 			ProviderId:         providerID,
+			ListUnitPrice:      listUnitPrice,
 			UsageQuantity:      usageQuantity,
-			UsageUnit:          record.UsageUnit,
+			UsageUnit:          usageUnit,
+			Metadata:           record.Tags,
 			ExtendedAttributes: &extendedAttrs,
 		}
 
@@ -420,6 +437,90 @@ func databricksUsageToCustomCosts(config *databricksplugin.DatabricksConfig, rec
 	}
 
 	return customCosts
+}
+
+// defaultUsageUnit is used when the CSV has no unit column. The legacy
+// billable usage CSV reports usage in DBUs (the "dbus" column).
+const defaultUsageUnit = "DBU"
+
+// parseTags parses the clusterCustomTags JSON object. Values that are not
+// strings are kept in their JSON form. Invalid JSON yields nil.
+func parseTags(raw string) map[string]string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" {
+		return nil
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		log.Debugf("ignoring unparseable Databricks custom tags %q: %v", raw, err)
+		return nil
+	}
+	tags := make(map[string]string, len(parsed))
+	for k, v := range parsed {
+		switch val := v.(type) {
+		case string:
+			tags[k] = val
+		default:
+			b, _ := json.Marshal(val)
+			tags[k] = string(b)
+		}
+	}
+	return tags
+}
+
+// rowKey returns a deterministic key for a CSV row: a hash of all its
+// fields, plus a counter when the same row appears more than once.
+func rowKey(row []string, seen map[string]int) string {
+	h := sha256.New()
+	for _, field := range row {
+		h.Write([]byte(strings.TrimSpace(field)))
+		h.Write([]byte{0})
+	}
+	key := hex.EncodeToString(h.Sum(nil))[:16]
+	seen[key]++
+	if n := seen[key]; n > 1 {
+		key = fmt.Sprintf("%s-%d", key, n)
+	}
+	return key
+}
+
+// providerIDForRecord builds a stable, unique ID for rows without a
+// record_id. Workspace, SKU and hour alone are not unique: Databricks emits
+// several rows per SKU and hour, often with an empty clusterId.
+func providerIDForRecord(record usageRecord) string {
+	if record.RowKey == "" {
+		return ""
+	}
+	return strings.Join(compact([]string{record.AccountID, record.WorkspaceID, record.SKUName, record.UsageStartTime, record.UsageDate, record.RowKey}), "/")
+}
+
+// resourceNameForRecord picks the most specific identifier for the workload
+// behind a usage row. In the legacy CSV, clusterId is empty for most
+// serverless usage; the workload is identified by clusterCustomTags instead.
+func resourceNameForRecord(record usageRecord) string {
+	tags := record.Tags
+	switch {
+	case tags["ai.model_family"] != "":
+		return "model/" + tags["ai.model_family"]
+	case tags["JobId"] != "":
+		return "job/" + tags["JobId"]
+	case tags["NotebookId"] != "":
+		return "notebook/" + tags["NotebookId"]
+	case tags["SqlEndpointId"] != "":
+		return "sql-warehouse/" + tags["SqlEndpointId"]
+	case strings.HasPrefix(record.ClusterName, "dlt-execution-"):
+		return "pipeline/" + record.ClusterName
+	}
+	if id := firstNonEmpty(record.ClusterID, record.JobID, record.WarehouseID, record.InstancePoolID); id != "" {
+		return id
+	}
+	if workload := tags["DatabricksScgwWorkloadType"]; workload != "" {
+		return "serverless-" + strings.ToLower(workload) + "/" + record.WorkspaceID
+	}
+	if strings.Contains(record.SKUName, "INFERENCE") {
+		return "model-serving/" + record.WorkspaceID
+	}
+	return record.WorkspaceID
 }
 
 func unitPriceForSKU(config *databricksplugin.DatabricksConfig, sku string) float64 {
