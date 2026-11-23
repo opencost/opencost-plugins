@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -132,6 +134,95 @@ func TestParseUsageCSVSupportsLegacyHeaders(t *testing.T) {
 	}
 	if records[0].UsageQuantity != 4.5 {
 		t.Fatalf("unexpected usage quantity: %f", records[0].UsageQuantity)
+	}
+}
+
+// TestGetCustomCostsRecoversFromExpiredToken reproduces what a real
+// Databricks-on-GCP account returns for an expired token (403 with the reason
+// only in WWW-Authenticate) and checks that the plugin fetches a new token
+// and retries instead of failing every window.
+func TestGetCustomCostsRecoversFromExpiredToken(t *testing.T) {
+	var mu sync.Mutex
+	tokenRequests, usageRequests := 0, 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/oidc/accounts/abc-123/v1/token":
+			tokenRequests++
+			user, pass, _ := r.BasicAuth()
+			if user != "client-1" || pass != "secret-1" {
+				t.Errorf("unexpected client credentials %q/%q", user, pass)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"access_token":"token-%d","token_type":"Bearer","expires_in":3600}`, tokenRequests)
+		case "/api/2.0/accounts/abc-123/usage/download":
+			usageRequests++
+			if r.Header.Get("Authorization") == "Bearer token-1" {
+				// The first token is rejected as expired, like Databricks does.
+				w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="The access token expired"`)
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte("Invalid Token"))
+				return
+			}
+			if r.Header.Get("Authorization") != "Bearer token-2" {
+				t.Errorf("unexpected auth header %q", r.Header.Get("Authorization"))
+			}
+			_, _ = w.Write([]byte("workspaceId,timestamp,clusterId,sku,dbus\n" +
+				"111,2026-05-01T09:59:59.999Z,c-1,PREMIUM_JOBS_COMPUTE,2\n"))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	config := &databricksplugin.DatabricksConfig{
+		AccountID:         "abc-123",
+		ClientID:          "client-1",
+		ClientSecret:      "secret-1",
+		Scope:             "billing:read",
+		AccountAPIBaseURL: server.URL,
+		DefaultUnitPrice:  0.5,
+	}
+	tokens, err := databricksplugin.NewTokenProvider(config, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := DatabricksCostSource{client: server.Client(), config: config, tokens: tokens}
+
+	resp := source.GetCustomCosts(customCostRequest())
+	if len(resp) != 2 {
+		t.Fatalf("expected two responses, got %d", len(resp))
+	}
+	for _, r := range resp {
+		if len(r.Errors) != 0 {
+			t.Fatalf("unexpected errors: %v", r.Errors)
+		}
+	}
+	if len(resp[0].Costs) != 1 || resp[0].Costs[0].BilledCost != 1 {
+		t.Fatalf("expected one $1 cost on day one, got %+v", resp[0].Costs)
+	}
+	if tokenRequests != 2 || usageRequests != 2 {
+		t.Fatalf("expected 2 token and 2 usage requests, got %d and %d", tokenRequests, usageRequests)
+	}
+}
+
+func TestExpiredStaticTokenReportsReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="The access token expired"`)
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("Invalid Token"))
+	}))
+	defer server.Close()
+
+	config := &databricksplugin.DatabricksConfig{AccountID: "abc-123", Token: "old", AccountAPIBaseURL: server.URL}
+	tokens, _ := databricksplugin.NewTokenProvider(config, server.Client())
+	source := DatabricksCostSource{client: server.Client(), config: config, tokens: tokens}
+
+	resp := source.GetCustomCosts(customCostRequest())
+	if len(resp[0].Errors) != 1 || !strings.Contains(resp[0].Errors[0], "The access token expired") {
+		t.Fatalf("expected the expiry reason in the error, got %v", resp[0].Errors)
 	}
 }
 

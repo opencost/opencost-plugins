@@ -40,6 +40,8 @@ type HTTPClient interface {
 type DatabricksCostSource struct {
 	client HTTPClient
 	config *databricksplugin.DatabricksConfig
+	// tokens supplies access tokens. If nil, config.Token is used as-is.
+	tokens databricksplugin.TokenProvider
 }
 
 type usageRecord struct {
@@ -75,9 +77,21 @@ func main() {
 	}
 	log.SetLogLevel(databricksConfig.LogLevel)
 
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	tokens, err := databricksplugin.NewTokenProvider(databricksConfig, httpClient)
+	if err != nil {
+		log.Fatalf("error building Databricks token provider: %v", err)
+	}
+	authMethod, _ := databricksConfig.AuthMethod()
+	log.Infof("Databricks plugin using %s authentication", authMethod)
+	if authMethod == databricksplugin.AuthMethodToken {
+		log.Warnf("a static Databricks token expires after about one hour; use client_secret or federated_token_file for long-running deployments")
+	}
+
 	databricksCostSrc := DatabricksCostSource{
-		client: http.DefaultClient,
+		client: httpClient,
 		config: databricksConfig,
+		tokens: tokens,
 	}
 
 	var pluginMap = map[string]plugin.Plugin{
@@ -149,21 +163,57 @@ func boilerplateDatabricksCustomCost(win opencost.Window) pb.CustomCostResponse 
 }
 
 func (d *DatabricksCostSource) getUsageForMonth(month string) ([]usageRecord, error) {
+	records, retry, err := d.downloadUsage(month)
+	if retry {
+		// The API rejected the token (for example it expired early or was
+		// revoked). Drop it and try once more with a fresh one.
+		log.Debugf("Databricks rejected the access token, fetching a new one: %v", err)
+		d.tokens.Invalidate()
+		records, _, err = d.downloadUsage(month)
+	}
+	return records, err
+}
+
+func (d *DatabricksCostSource) accessToken() (string, error) {
+	if d.tokens == nil {
+		return d.config.Token, nil
+	}
+	return d.tokens.Token()
+}
+
+// canRefreshToken reports whether a rejected token could be replaced by a
+// new one. A static token cannot.
+func (d *DatabricksCostSource) canRefreshToken() bool {
+	if d.tokens == nil {
+		return false
+	}
+	method, err := d.config.AuthMethod()
+	return err == nil && method != databricksplugin.AuthMethodToken
+}
+
+// downloadUsage fetches one month of usage. retry is true when the request
+// failed because the token was rejected and a fresh token might succeed.
+func (d *DatabricksCostSource) downloadUsage(month string) (records []usageRecord, retry bool, err error) {
 	endpoint, err := d.usageDownloadURL(month)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+
+	token, err := d.accessToken()
+	if err != nil {
+		return nil, false, fmt.Errorf("error getting Databricks access token: %v", err)
 	}
 
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("error creating Databricks usage request: %v", err)
+		return nil, false, fmt.Errorf("error creating Databricks usage request: %v", err)
 	}
 	req.Header.Set("Accept", "text/plain")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", d.config.Token))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("error doing Databricks usage request: %v", err)
+		return nil, false, fmt.Errorf("error doing Databricks usage request: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -173,15 +223,24 @@ func (d *DatabricksCostSource) getUsageForMonth(month string) ([]usageRecord, er
 		if readErr == nil {
 			bodyString = string(bodyBytes)
 		}
-		return nil, fmt.Errorf("received non-200 response for Databricks usage request: %d body: %s", resp.StatusCode, bodyString)
+		// Databricks puts the reason for a rejected token, such as
+		// "The access token expired", in WWW-Authenticate, not the body.
+		authHeader := resp.Header.Get("WWW-Authenticate")
+		detail := ""
+		if authHeader != "" {
+			detail = fmt.Sprintf(" www-authenticate: %s", authHeader)
+		}
+		tokenRejected := d.canRefreshToken() && (resp.StatusCode == http.StatusUnauthorized ||
+			(resp.StatusCode == http.StatusForbidden && strings.Contains(authHeader, "invalid_token")))
+		return nil, tokenRejected, fmt.Errorf("received non-200 response for Databricks usage request: %d body: %s%s", resp.StatusCode, bodyString, detail)
 	}
 
-	records, err := parseUsageCSV(resp.Body)
+	records, err = parseUsageCSV(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing Databricks usage CSV: %v", err)
+		return nil, false, fmt.Errorf("error parsing Databricks usage CSV: %v", err)
 	}
 
-	return records, nil
+	return records, false, nil
 }
 
 func (d *DatabricksCostSource) usageDownloadURL(month string) (string, error) {
